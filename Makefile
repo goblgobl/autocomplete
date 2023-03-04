@@ -1,4 +1,4 @@
-F="facs.zig"
+F="zac.zig"
 
 .PHONY: t
 t:
