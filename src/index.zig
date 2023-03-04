@@ -2,13 +2,14 @@ const std = @import("std");
 const t = @import("t.zig");
 const Input = @import("input.zig").Input;
 
-const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const Allocator = std.mem.Allocator;
+const AutoHashMap = std.AutoHashMap;
 const StringHashMap = std.StringHashMap;
 
 pub const Index = struct {
 	allocator: Allocator,
-	entries: ArrayList(*Entry),
+	entries: AutoHashMap(u32, *Entry),
 	lookup: StringHashMap(ArrayList(NgramInfo)),
 
 	const Self = @This();
@@ -16,7 +17,7 @@ pub const Index = struct {
 	pub fn init(allocator: Allocator) !Index {
 		return Index{
 			.allocator = allocator,
-			.entries = ArrayList(*Entry).init(allocator),
+			.entries = AutoHashMap(u32, *Entry).init(allocator),
 			.lookup = StringHashMap(ArrayList(NgramInfo)).init(allocator),
 		};
 	}
@@ -28,14 +29,14 @@ pub const Index = struct {
 
 		var entry = try allocator.create(Entry);
 		entry.id = id;
-		try self.entries.append(entry);
+		try self.entries.put(id, entry);
 
 		var lookup = &self.lookup;
 		var input = try Input.parse(allocator, value);
 		while (input.next()) |result| {
 			const ngram_index= result.ngram_index;
 			const np = NgramInfo{
-				.entry = entry,
+				.entry_id = id,
 				.word_index = result.word_index,
 				.ngram_index = ngram_index,
 			};
@@ -55,20 +56,24 @@ pub const Index = struct {
 	}
 
 	pub fn count(self: *Self) usize {
-		return self.entries.items.len;
+		return self.entries.count();
 	}
 
 	pub fn deinit(self: *Self) void {
 		const allocator = self.allocator;
 
-		for (self.entries.items) |entry| {
-			entry.deinit(allocator);
-			allocator.destroy(entry);
+		// free up entries
+		var it1 = self.entries.valueIterator();
+		while (it1.next()) |entry| {
+			const e = entry.*;
+			allocator.free(e.value);
+			allocator.destroy(e);
 		}
 		self.entries.deinit();
 
-		var it = self.lookup.valueIterator();
-		while (it.next()) |list| {
+		// free up lookup
+		var it2 = self.lookup.valueIterator();
+		while (it2.next()) |list| {
 			list.deinit();
 		}
 		self.lookup.deinit();
@@ -79,21 +84,14 @@ pub const Index = struct {
 
 const Entry = struct {
 	id: u32,
-	value: []const u8,
 	word_count: u8,
-
-	const Self = @This();
-
-	pub fn deinit(self: *Self, allocator: Allocator) void {
-		allocator.free(self.value);
-		self.* = undefined;
-	}
+	value: []const u8,
 };
 
 const NgramInfo = struct {
+	entry_id: u32,
 	word_index: Input.WordIndexType,
 	ngram_index: Input.NgramIndexType,
-	entry: *Entry,
 };
 
 test "index add" {
@@ -115,11 +113,11 @@ test "index add" {
 
 		const hits = db.lookup.get("ver").?;
 		try t.expectEqual(hits.items.len, 2);
-		try t.expectEqual(hits.items[0].entry.id, 1);
+		try t.expectEqual(hits.items[0].entry_id, 1);
 		try t.expectEqual(hits.items[0].word_index, 0);
 		try t.expectEqual(hits.items[0].ngram_index, 3);
 
-		try t.expectEqual(hits.items[1].entry.id, 3);
+		try t.expectEqual(hits.items[1].entry_id, 3);
 		try t.expectEqual(hits.items[1].word_index, 1);
 		try t.expectEqual(hits.items[1].ngram_index, 2);
 	}

@@ -9,6 +9,10 @@ const StringHashMap = std.StringHashMap;
 const MAX_WORDS = (1 << @bitSizeOf(Input.WordIndexType)) - 1;
 const MAX_WORD_LENGTH = (1 << @bitSizeOf(Input.NgramIndexType)) - 1;
 
+// Takes an input and provides an iterator over normalized trigram. Every
+// result includes the word, the word_index and the ngram_index (the index in
+// the word where the trigram starts).
+// Normalizing means ignoring non-alphanumeric (ascii) + lowercasing the input.
 pub const Input = struct {
 	input: []const u8,
 	normalized_position: u32,
@@ -37,18 +41,27 @@ pub const Input = struct {
 		};
 	}
 
+	// The iterator works by internally finding a word, and then yielding an trigram
+	// at a time of that word.
 	pub fn next(self: *Self) ?WordState {
 		@setRuntimeSafety(builtin.is_test);
 
 		if (self.word_state) |*ws| {
+			// we've previously found a word, we need to yield the next trigram from it
 			const word = ws.word;
 			const ngram_index = ws.ngram_index;
 			if (ngram_index < word.len - 3) {
+				// yield
 				ws.*.ngram_index += 1;
 				return ws.*;
 			}
+
+			// we only have 2 characters of the word left, set the word_state to null
+			// and go look for the next word
 			self.word_state = null;
 		}
+
+		// we're going to find the next word (and normalize it).
 
 		var normalized = self.normalized;
 
@@ -99,6 +112,7 @@ pub const Input = struct {
 			if (word_count == MAX_WORDS) {
 				return null;
 			}
+
 			self.word_count = word_count + 1;
 			return self.word_state;
 		}

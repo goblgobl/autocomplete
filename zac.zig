@@ -1,6 +1,7 @@
 const std = @import("std");
 pub const Index = @import("./src/index.zig").Index;
 
-comptime {
+test {
+	_ = @import("./src/search.zig");
 	std.testing.refAllDecls(@This());
 }
