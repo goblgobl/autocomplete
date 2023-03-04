@@ -9,7 +9,7 @@ const StringHashMap = std.StringHashMap;
 pub const Index = struct {
 	allocator: Allocator,
 	entries: ArrayList(*Entry),
-	lookup: StringHashMap(ArrayList(NgramPosition)),
+	lookup: StringHashMap(ArrayList(NgramInfo)),
 
 	const Self = @This();
 
@@ -17,7 +17,7 @@ pub const Index = struct {
 		return Index{
 			.allocator = allocator,
 			.entries = ArrayList(*Entry).init(allocator),
-			.lookup = StringHashMap(ArrayList(NgramPosition)).init(allocator),
+			.lookup = StringHashMap(ArrayList(NgramInfo)).init(allocator),
 		};
 	}
 
@@ -33,17 +33,19 @@ pub const Index = struct {
 		var lookup = &self.lookup;
 		var input = try Input.parse(allocator, value);
 		while (input.next()) |result| {
-			const np = NgramPosition{
+			const ngram_index= result.ngram_index;
+			const np = NgramInfo{
 				.entry = entry,
-				.position = result.position,
 				.word_index = result.word_index,
+				.ngram_index = ngram_index,
 			};
 
-			var gop = try lookup.getOrPut(result.ngram);
+			const ngram = result.word[ngram_index..ngram_index+3];
+			var gop = try lookup.getOrPut(ngram);
 			if (gop.found_existing) {
 				try gop.value_ptr.append(np);
 			} else {
-				var list = ArrayList(NgramPosition).init(allocator);
+				var list = ArrayList(NgramInfo).init(allocator);
 				try list.append(np);
 				gop.value_ptr.* = list;
 			}
@@ -88,9 +90,9 @@ const Entry = struct {
 	}
 };
 
-const NgramPosition = struct {
-	position: u8,
-	word_index: u8,
+const NgramInfo = struct {
+	word_index: Input.WordIndexType,
+	ngram_index: Input.NgramIndexType,
 	entry: *Entry,
 };
 
@@ -114,11 +116,11 @@ test "index add" {
 		const hits = db.lookup.get("ver").?;
 		try t.expectEqual(hits.items.len, 2);
 		try t.expectEqual(hits.items[0].entry.id, 1);
-		try t.expectEqual(hits.items[0].position, 3);
 		try t.expectEqual(hits.items[0].word_index, 0);
+		try t.expectEqual(hits.items[0].ngram_index, 3);
 
 		try t.expectEqual(hits.items[1].entry.id, 3);
-		try t.expectEqual(hits.items[1].position, 2);
 		try t.expectEqual(hits.items[1].word_index, 1);
+		try t.expectEqual(hits.items[1].ngram_index, 2);
 	}
 }

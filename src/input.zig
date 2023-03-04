@@ -6,25 +6,25 @@ const ascii = std.ascii;
 const Allocator = std.mem.Allocator;
 const StringHashMap = std.StringHashMap;
 
+const MAX_WORDS = (1 << @bitSizeOf(Input.WordIndexType)) - 1;
+const MAX_WORD_LENGTH = (1 << @bitSizeOf(Input.NgramIndexType)) - 1;
+
 pub const Input = struct {
 	input: []const u8,
 	normalized_position: u32,
 	normalized: []u8,
-	word_count: u8,
+	word_count: u3,
 	word_state: ?WordState,
 
 	const Self = @This();
 
-	const Result = struct {
-		ngram: []const u8,
-		position: u8,
-		word_index: u8,
-	};
+	pub const WordIndexType = u3;
+	pub const NgramIndexType = u5;
 
 	const WordState = struct {
-		index: u8,
-		position: u8,
 		word: []const u8,
+		word_index: WordIndexType,
+		ngram_index: NgramIndexType,
 	};
 
 	pub fn parse(allocator: Allocator, input: []const u8) !Self {
@@ -37,24 +37,15 @@ pub const Input = struct {
 		};
 	}
 
-	pub fn next(self: *Self) ?Result {
+	pub fn next(self: *Self) ?WordState {
 		@setRuntimeSafety(builtin.is_test);
 
-		if (self.word_state) |ws| {
+		if (self.word_state) |*ws| {
 			const word = ws.word;
-			const position = ws.position;
-			if (position < word.len - 2) {
-				self.word_state = WordState{
-					.word = word,
-					.index = ws.index,
-					.position = position + 1,
-				};
-
-				return Result{
-					.position = position,
-					.ngram = word[position .. position + 3],
-					.word_index = ws.index,
-				};
+			const ngram_index = ws.ngram_index;
+			if (ngram_index < word.len - 3) {
+				ws.*.ngram_index += 1;
+				return ws.*;
 			}
 			self.word_state = null;
 		}
@@ -95,13 +86,21 @@ pub const Input = struct {
 		self.normalized_position = normalized_position;
 
 		if (normalized_position - word_start > 2) {
+			var word = normalized[word_start..normalized_position];
+			if (word.len > MAX_WORD_LENGTH) {
+				word = word[0..MAX_WORD_LENGTH];
+			}
 			self.word_state = WordState{
-				.position = 0,
-				.index = word_count,
-				.word = normalized[word_start..normalized_position],
+				.word = word,
+				.ngram_index = 0,
+				.word_index = word_count,
 			};
 
+			if (word_count == MAX_WORDS) {
+				return null;
+			}
 			self.word_count = word_count + 1;
+			return self.word_state;
 		}
 		return self.next();
 	}
@@ -197,6 +196,22 @@ test "parse two word" {
 	}
 }
 
+test "stops at 8 words" {
+		var input = try testCollectInput("wrd1 wrd2 wrd3 wrd4 wrd5 wrd6 wrd7 wrd8 wrd9");
+		defer input.deinit();
+		try t.expectEqual(input.word_count, 7);
+}
+
+test "stops at 31 character words" {
+		var input = try testCollectInput("0123456789012345678901234567ABC 0123456789012345678901234567VWXYZ");
+		defer input.deinit();
+		try t.expectEqual(input.word_count, 2);
+		try input.expectNgram("abc", 0, 28);
+		try input.expectNgram("vwx", 1, 28);
+		try input.noNgram("wxy");
+		try input.noNgram("xyz");
+}
+
 const ParseTestResult = struct {
 	value: []const u8,
 	word_count: u8,
@@ -205,14 +220,18 @@ const ParseTestResult = struct {
 	const Self = @This();
 
 	const Position = struct {
-		position: u8,
-		word_index: u8,
+		word_index: Input.WordIndexType,
+		ngram_index: Input.NgramIndexType,
 	};
 
-	fn expectNgram(self: Self, ngram: []const u8, word_index: u8, position: u8) !void {
+	fn expectNgram(self: Self, ngram: []const u8, word_index: Input.WordIndexType, ngram_index: Input.NgramIndexType) !void {
 		var p = self.lookup.get(ngram) orelse unreachable;
-		try t.expectEqual(p.position, position);
 		try t.expectEqual(p.word_index, word_index);
+		try t.expectEqual(p.ngram_index, ngram_index);
+	}
+
+	fn noNgram(self: Self, ngram: []const u8) !void {
+		try t.expectEqual(self.lookup.contains(ngram), false);
 	}
 
 	fn deinit(self: *Self) void {
@@ -226,9 +245,11 @@ fn testCollectInput(value: []const u8) !ParseTestResult {
 	var lookup = StringHashMap(ParseTestResult.Position).init(t.allocator);
 	var input = try Input.parse(t.allocator, value);
 	while (input.next()) |result| {
-		try lookup.put(result.ngram, ParseTestResult.Position{
-			.position = result.position,
+		const ngram_index = result.ngram_index;
+		const ngram = result.word[ngram_index..ngram_index+3];
+		try lookup.put(ngram, ParseTestResult.Position{
 			.word_index = result.word_index,
+			.ngram_index = ngram_index,
 		});
 	}
 	return ParseTestResult{
