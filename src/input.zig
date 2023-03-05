@@ -129,17 +129,17 @@ test "parse single word" {
 		// 2 letter word
 		var input = try testCollectInput("hi");
 		defer input.deinit();
-		try t.expectEqual(input.word_count, 0);
-		try t.expectEqual(input.lookup.count(), 0);
+		try t.expectEqual(@as(u8, 0), input.word_count);
+		try t.expectEqual(@as(usize, 0), input.lookup.count());
 	}
 
 	{
 		// 3 letter word
 		var input = try testCollectInput("Tea");
 		defer input.deinit();
-		try t.expectString(input.value, "tea");
-		try t.expectEqual(input.word_count, 1);
-		try t.expectEqual(input.lookup.count(), 1);
+		try t.expectString("tea", input.value,);
+		try t.expectEqual(@as(u8, 1),input.word_count);
+		try t.expectEqual(@as(usize, 1),input.lookup.count());
 		try input.expectNgram("tea", 0, 0);
 	}
 
@@ -151,8 +151,8 @@ test "parse single word" {
 		var input = try testCollectInput(value);
 		defer input.deinit();
 		try t.expectString(input.value, "keemun");
-		try t.expectEqual(input.word_count, 1);
-		try t.expectEqual(input.lookup.count(), 4);
+		try t.expectEqual(@as(u8, 1),input.word_count);
+		try t.expectEqual(@as(usize, 4),input.lookup.count());
 		try input.expectNgram("kee", 0, 0);
 		try input.expectNgram("eem", 0, 1);
 		try input.expectNgram("emu", 0, 2);
@@ -175,8 +175,8 @@ test "parse two word" {
 		var input = try testCollectInput(value);
 		defer input.deinit();
 		try t.expectString(input.value, "black bear");
-		try t.expectEqual(input.word_count, 2);
-		try t.expectEqual(input.lookup.count(), 5);
+		try t.expectEqual(@as(u8, 2),input.word_count);
+		try t.expectEqual(@as(usize, 5),input.lookup.count());
 		try input.expectNgram("bla", 0, 0);
 		try input.expectNgram("lac", 0, 1);
 		try input.expectNgram("ack", 0, 2);
@@ -189,8 +189,8 @@ test "parse two word" {
 			var input = try testCollectInput(" Black  at");
 			defer input.deinit();
 			try t.expectString(input.value, "black at");
-			try t.expectEqual(input.word_count, 1);
-			try t.expectEqual(input.lookup.count(), 3);
+			try t.expectEqual(@as(u8, 1),input.word_count);
+			try t.expectEqual(@as(usize, 3),input.lookup.count());
 			try input.expectNgram("bla", 0, 0);
 			try input.expectNgram("lac", 0, 1);
 			try input.expectNgram("ack", 0, 2);
@@ -201,8 +201,8 @@ test "parse two word" {
 		var input = try testCollectInput(" Black a  cat  ");
 		defer input.deinit();
 		try t.expectString(input.value, "black a cat");
-		try t.expectEqual(input.word_count, 2);
-		try t.expectEqual(input.lookup.count(), 4);
+		try t.expectEqual(@as(u8, 2),input.word_count);
+		try t.expectEqual(@as(usize, 4),input.lookup.count());
 		try input.expectNgram("bla", 0, 0);
 		try input.expectNgram("lac", 0, 1);
 		try input.expectNgram("ack", 0, 2);
@@ -213,13 +213,13 @@ test "parse two word" {
 test "stops at 8 words" {
 		var input = try testCollectInput("wrd1 wrd2 wrd3 wrd4 wrd5 wrd6 wrd7 wrd8 wrd9");
 		defer input.deinit();
-		try t.expectEqual(input.word_count, 7);
+		try t.expectEqual(@as(u8, 7), input.word_count);
 }
 
 test "stops at 31 character words" {
 		var input = try testCollectInput("0123456789012345678901234567ABC 0123456789012345678901234567VWXYZ");
 		defer input.deinit();
-		try t.expectEqual(input.word_count, 2);
+		try t.expectEqual(@as(u8, 2), input.word_count);
 		try input.expectNgram("abc", 0, 28);
 		try input.expectNgram("vwx", 1, 28);
 		try input.noNgram("wxy");
@@ -240,12 +240,12 @@ const ParseTestResult = struct {
 
 	fn expectNgram(self: Self, ngram: []const u8, word_index: Input.WordIndexType, ngram_index: Input.NgramIndexType) !void {
 		var p = self.lookup.get(ngram) orelse unreachable;
-		try t.expectEqual(p.word_index, word_index);
-		try t.expectEqual(p.ngram_index, ngram_index);
+		try t.expectEqual(word_index, p.word_index);
+		try t.expectEqual(ngram_index, p.ngram_index);
 	}
 
 	fn noNgram(self: Self, ngram: []const u8) !void {
-		try t.expectEqual(self.lookup.contains(ngram), false);
+		try t.expectEqual(false, self.lookup.contains(ngram));
 	}
 
 	fn deinit(self: *Self) void {

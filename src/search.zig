@@ -16,25 +16,27 @@ const EntryTracker = struct {
 	ngram_index: Input.NgramIndexType,
 };
 
-pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: [MAX_RESULTS]u32) !usize {
+pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[MAX_RESULTS]u32) !usize {
 	var arena = std.heap.ArenaAllocator.init(a);
 	defer arena.deinit();
   const allocator = arena.allocator();
 
-	var input = Input.parse(allocator, value);
+	var input = try Input.parse(allocator, value);
 
 	// we're getting matches from here
-	var lookup = index.lookups;
+	var lookup = index.lookup;
 
 	// and we're accumulating scores here
-	var accumulator = try AutoHashMap(u32, EntryTracker).init(allocator);
+	var accumulator = AutoHashMap(u32, EntryTracker).init(allocator);
 
 	// top scores/entries are mantained here
-	var top = Top.init(allocator, top_entries);
+	var top = try Top.init(allocator, top_entries);
 
 	while (input.next()) |result| {
-		const hits = lookup.get(result.value) orelse continue;
-		for (hits) |hit| {
+		const ngram_index= result.ngram_index;
+		const ngram = result.word[ngram_index..ngram_index+3];
+		const hits = lookup.get(ngram) orelse continue;
+		for (hits.items) |hit| {
 			const entry_id = hit.entry_id;
 			var score : u16 = 0;
 			var gop = try accumulator.getOrPut(entry_id);
@@ -51,22 +53,21 @@ pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: [MAX_R
 	return top.rank();
 }
 
-// Rather than constantly keeping our accumulator ordered, we instead
+// Rather than constantly keeping our full accumulator ordered, we instead
 // just keep the N top scores and associated N top entries.
 // We also keep the lowest of these top scores.
 // If we get a score which is greater than the lowest top score (and which
 // doesn't already belong to a top entry), we swap them out.
-
 const Top = struct {
 	low_index: u8,
 	low_score: u16,
 	scores: [MAX_RESULTS]u16,
-	entries: [MAX_RESULTS]u32,
+	entries: *[MAX_RESULTS]u32,
 	entry_lookup: AutoHashMap(u32, u8),
 
 	const Self = @This();
 
-	fn init(allocator: Allocator, entries: [MAX_RESULTS]u32) !Top {
+	fn init(allocator: Allocator, entries: *[MAX_RESULTS]u32) !Top {
 		var entry_lookup = AutoHashMap(u32, u8).init(allocator);
 		try entry_lookup.ensureTotalCapacity(MAX_RESULTS);
 
@@ -100,7 +101,7 @@ const Top = struct {
 			}
 
 		} else if (new_score > low_score) {
-			var entries = &self.entries;
+			var entries = self.entries;
 
 			// we have a score for an entry which IS not currently in the top entries
 			// but which now has a score higher than our lowest top score
@@ -129,9 +130,12 @@ const Top = struct {
 		}
 	}
 
+	// After this is called, top should not be used, as we sort self.entries
+	// based on the scores VALUE, and thus the entries indexes are no longer
+	// consistent with the score.
 	fn rank(self: *Self) usize {
 		// we are going to sort this
-		var entries = &self.entries;
+		var entries = self.entries;
 
 		// based on this
 		const scores = self.scores;
@@ -151,12 +155,70 @@ const Top = struct {
 	}
 };
 
+test "search" {
+	var found : usize = 0;
+	var entries : [MAX_RESULTS]u32 = undefined;
+
+	{
+		// empty index
+		var index = try Index.init(t.allocator);
+		defer index.deinit();
+		found = try search(t.allocator, "anything", index, &entries);
+		try t.expectEqual(@as(usize, 0), found);
+	}
+
+	{
+		// index with 1 entry
+		var index = try Index.init(t.allocator);
+		try index.add(99, "silver needle");
+		defer index.deinit();
+
+		found = try search(t.allocator, "nope", index, &entries);
+		try t.expectEqual(@as(usize, 0), found);
+
+		const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
+		for (inputs) |input| {
+			found = try search(t.allocator, input, index, &entries);
+			try t.expectEqual(found, 1);
+			try t.expectEqual(@as(u32, 99), entries[0]);
+		}
+	}
+
+	{
+		// index with multiple entries
+		var index = try Index.init(t.allocator);
+		try index.add(50, "silver needle");
+		try index.add(60, "keemun");
+		try index.add(70, "iron goddess");
+		try index.add(80, "dragon well");
+		try index.add(90, "yellow mountain");
+		defer index.deinit();
+
+		found = try search(t.allocator, "nope", index, &entries);
+		try t.expectEqual(@as(usize, 0), found);
+
+		found = try search(t.allocator, "kee", index, &entries);
+		try t.expectEqual(found, 1);
+		try t.expectEqual(@as(u32, 60), entries[0]);
+
+		found = try search(t.allocator, "yellow", index, &entries);
+		try t.expectEqual(found, 2);
+		try t.expectEqual(@as(u32, 90), entries[0]);
+		try t.expectEqual(@as(u32, 80), entries[1]);
+
+		found = try search(t.allocator, "ell dragon", index, &entries);
+		try t.expectEqual(found, 2);
+		try t.expectEqual(@as(u32, 80), entries[0]);
+		try t.expectEqual(@as(u32, 90), entries[1]);
+	}
+
+}
 
 test "top" {
 	var entries : [MAX_RESULTS]u32 = undefined;
 	{
 		// single result
-		var top = try Top.init(t.allocator, entries);
+		var top = try Top.init(t.allocator, &entries);
 		defer top.entry_lookup.deinit();
 
 		top.update(1, 1);
@@ -171,7 +233,7 @@ test "top" {
 
 	{
 		// two resutls (baby steps!)
-		var top = try Top.init(t.allocator, entries);
+		var top = try Top.init(t.allocator, &entries);
 		defer top.entry_lookup.deinit();
 
 		top.update(1, 1);
@@ -186,7 +248,7 @@ test "top" {
 
 	{
 		// many results
-		var top = try Top.init(t.allocator, entries);
+		var top = try Top.init(t.allocator, &entries);
 		defer top.entry_lookup.deinit();
 
 		for (1..100) |i| {
@@ -205,7 +267,6 @@ test "top" {
 		try assertTop(&top, expected[0..]);
 	}
 }
-
 
 fn assertTop(top: *Top, expected: []u32) !void {
 	const n = top.rank();

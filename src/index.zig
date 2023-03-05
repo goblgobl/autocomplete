@@ -101,24 +101,24 @@ test "index add" {
 		try t.expectEqual(db.count(), 0);
 
 		try db.add(1, "silver needle");
-		try t.expectEqual(db.count(), 1);
-		try t.expectEqual(db.lookup.count(), 8);
+		try t.expectEqual(@as(usize, 1), db.count());
+		try t.expectEqual(@as(usize, 8), db.lookup.count());
 
 		try db.add(2, "white peony");
-		try t.expectEqual(db.count(), 2);
-		try t.expectEqual(db.lookup.count(), 14);
+		try t.expectEqual(@as(usize, 2), db.count());
+		try t.expectEqual(@as(usize, 14), db.lookup.count());
 
 		try db.add(3, "for never");
-		try t.expectEqual(db.count(), 3);
+		try t.expectEqual(@as(usize, 3), db.count());
 
 		const hits = db.lookup.get("ver").?;
-		try t.expectEqual(hits.items.len, 2);
-		try t.expectEqual(hits.items[0].entry_id, 1);
-		try t.expectEqual(hits.items[0].word_index, 0);
-		try t.expectEqual(hits.items[0].ngram_index, 3);
+		try t.expectEqual(@as(usize, 2), hits.items.len);
+		try t.expectEqual(@as(u32, 1), hits.items[0].entry_id);
+		try t.expectEqual(@as(Input.WordIndexType, 0), hits.items[0].word_index);
+		try t.expectEqual(@as(Input.NgramIndexType, 3), hits.items[0].ngram_index);
 
-		try t.expectEqual(hits.items[1].entry_id, 3);
-		try t.expectEqual(hits.items[1].word_index, 1);
-		try t.expectEqual(hits.items[1].ngram_index, 2);
+		try t.expectEqual(@as(u32, 3), hits.items[1].entry_id);
+		try t.expectEqual(@as(Input.WordIndexType, 1), hits.items[1].word_index);
+		try t.expectEqual(@as(Input.NgramIndexType, 2), hits.items[1].ngram_index);
 	}
 }
