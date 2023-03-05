@@ -40,21 +40,23 @@ pub const Index = struct {
 		var lookup = &self.lookup;
 		var input = try Input.parse(allocator, value);
 		while (input.next()) |result| {
-			const ngram_index= result.ngram_index;
-			const np = NgramInfo{
-				.entry_id = id,
-				.word_index = result.word_index,
-				.ngram_index = ngram_index,
-			};
+			const word = result.value;
+			for (0..word.len - 2) |ngram_index| {
+				const np = NgramInfo{
+					.entry_id = id,
+					.word_index = result.index,
+					.ngram_index = @intCast(Input.NgramIndexType, ngram_index),
+				};
 
-			const ngram = result.word[ngram_index..ngram_index+3];
-			var gop = try lookup.getOrPut(ngram);
-			if (gop.found_existing) {
-				try gop.value_ptr.append(np);
-			} else {
-				var list = ArrayList(NgramInfo).init(allocator);
-				try list.append(np);
-				gop.value_ptr.* = list;
+				const ngram = word[ngram_index..ngram_index+3];
+				var gop = try lookup.getOrPut(ngram);
+				if (gop.found_existing) {
+					try gop.value_ptr.append(np);
+				} else {
+					var list = ArrayList(NgramInfo).init(allocator);
+					try list.append(np);
+					gop.value_ptr.* = list;
+				}
 			}
 		}
 		entry.value = input.getNormalized();

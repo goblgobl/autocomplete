@@ -1,5 +1,6 @@
 const std = @import("std");
 const t = @import("t.zig");
+
 const Index = @import("index.zig").Index;
 const Input = @import("input.zig").Input;
 
@@ -39,106 +40,110 @@ pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[MAX_
 	var top = try Top.init(allocator, top_entries);
 
 	while (input.next()) |result| {
-		const ngram_index = result.ngram_index;
-		const ngram = result.word[ngram_index..ngram_index+3];
-		const hits = lookup.get(ngram) orelse continue;
+		const word = result.value;
+		for (0..word.len - 2) |ngram_index| {
+			const ngram = result.value[ngram_index..ngram_index+3];
+			const hits = lookup.get(ngram) orelse continue;
 
-		const word_index = result.word_index;
+			const word_index = result.index;
 
-		const word_index_i32 = @as(i32, word_index);
-		const ngram_index_i32 = @as(i32, ngram_index);
+			// this can't all be necessary, can it?
+			const word_index_i32 = @as(i32, word_index);
+			const ngram_index_i32 = @intCast(i32, ngram_index);
+			const ngram_typed = @intCast(Input.NgramIndexType, ngram_index);
 
-		var last_entry_id: u32 = 0;
-		for (hits.items) |hit| {
-			const entry_id = hit.entry_id;
+			var last_entry_id: u32 = 0;
+			for (hits.items) |hit| {
+				const entry_id = hit.entry_id;
 
-			if (entry_id == last_entry_id) {
-				// TODO:
-				// An entry can have the same ngram multiple times. When we're indexing,
-				// we keep them all. Ideally, when we're here, we want to find the best
-				// possible match.
-				// What we 100% don't wan to to do though is score the same ngram for
-				// an entry mutliple times. So for now, we'll just pick the first one
-				// we find and skip any subsequent ones. But we should see if we can
-				// come up with a better option.
-				// This skipping only works because we're sure all ngrams for an entry
-				// are groupped together, so we only need to consider last_entry_id
-				continue;
-			}
-
-			last_entry_id = entry_id;
-
-			// any hit gets a minimum score of 1
-			// (we can always filter out low scores as a final pass, but for now we
-			// want to collect everything)
-			var score : u16 = 1;
-
-
-			// word_index and ngram_indexes are the positions within the provided input
-			// entry_word_index and entry_ngram_indexes are the positions within the
-			// indexes entries. The closer word_index is to entry_word_index, the better.
-			// More importantly, the closer ngram_index is to entry_ngram_indexes, the better.
-			const entry_word_index = hit.word_index;
-			const entry_ngram_index = hit.ngram_index;
-
-
-			score += switch (word_index_i32 - entry_word_index) {
-				0 => 6,   // words are in the same position, quite meaningful
-				1, -1 => 3, // words are off by 1, not very meangful
-				2, -2 => 1, // words are off by 2, which isn't great, but still a slight boost
-				else => 0,
-			};
-
-			switch (ngram_index_i32 - entry_ngram_index) {
-				0 => {
-					// ngrams at the right position are super important, especially early
-					// in the input, like the prefix.
-					if (ngram_index == 0) {
-						score += 30;
-					} else if (ngram_index == 1) {
-						score += 15;
-					} else {
-						score += 10;
-					}
-
-				},
-				1, -1 => score += 8, // ngram position is off by 1, pretty good, common for spelling errors
-				2, -2 => score += 5, // ngram position is off by 2, still quite likely with spelling errors
-				3, -3 => score += 1,
-				else => {},
-			}
-
-			var gop = try accumulator.getOrPut(entry_id);
-			if (gop.found_existing) {
-				// We've matched this entry before
-				const es = gop.value_ptr.*;
-				if (es.word_index == word_index) {
-					const previous_ngram_index = es.ngram_index;
-
-					// It's possible for ngram_index == previous_ngram_index in the same
-
-					if (ngram_index > previous_ngram_index) {
-						// the -1 is because es.ngram_index was the last match, so even in the
-						// best case (where we're matching the next ngram), we'll always be
-						// 1 off
-						const boost = 30 - (ngram_index - previous_ngram_index - 1) * 5;
-						if (boost > 0) {
-							score += boost;
-						}
-					}
+				if (entry_id == last_entry_id) {
+					// TODO:
+					// An entry can have the same ngram multiple times. When we're indexing,
+					// we keep them all. Ideally, when we're here, we want to find the best
+					// possible match.
+					// What we 100% don't wan to to do though is score the same ngram for
+					// an entry mutliple times. So for now, we'll just pick the first one
+					// we find and skip any subsequent ones. But we should see if we can
+					// come up with a better option.
+					// This skipping only works because we're sure all ngrams for an entry
+					// are groupped together, so we only need to consider last_entry_id
+					continue;
 				}
 
-				// score is cumulative, so add the score we had before
-				score += es.score;
+				last_entry_id = entry_id;
+
+				// any hit gets a minimum score of 1
+				// (we can always filter out low scores as a final pass, but for now we
+				// want to collect everything)
+				var score : u16 = 1;
+
+
+				// word_index and ngram_indexes are the positions within the provided input
+				// entry_word_index and entry_ngram_indexes are the positions within the
+				// indexes entries. The closer word_index is to entry_word_index, the better.
+				// More importantly, the closer ngram_index is to entry_ngram_indexes, the better.
+				const entry_word_index = hit.word_index;
+				const entry_ngram_index = hit.ngram_index;
+
+
+				score += switch (word_index_i32 - entry_word_index) {
+					0 => 6,   // words are in the same position, quite meaningful
+					1, -1 => 3, // words are off by 1, not very meangful
+					2, -2 => 1, // words are off by 2, which isn't great, but still a slight boost
+					else => 0,
+				};
+
+				switch (ngram_index_i32 - entry_ngram_index) {
+					0 => {
+						// ngrams at the right position are super important, especially early
+						// in the input, like the prefix.
+						if (ngram_index == 0) {
+							score += 30;
+						} else if (ngram_index == 1) {
+							score += 15;
+						} else {
+							score += 10;
+						}
+
+					},
+					1, -1 => score += 8, // ngram position is off by 1, pretty good, common for spelling errors
+					2, -2 => score += 5, // ngram position is off by 2, still quite likely with spelling errors
+					3, -3 => score += 1,
+					else => {},
+				}
+
+				var gop = try accumulator.getOrPut(entry_id);
+				if (gop.found_existing) {
+					// We've matched this entry before
+					const es = gop.value_ptr.*;
+					if (es.word_index == word_index) {
+						const previous_ngram_index = es.ngram_index;
+
+						// It's possible for ngram_index == previous_ngram_index in the same
+
+						if (ngram_index > previous_ngram_index) {
+							// the -1 is because es.ngram_index was the last match, so even in the
+							// best case (where we're matching the next ngram), we'll always be
+							// 1 off
+							const boost = 30 - (ngram_typed - previous_ngram_index - 1) * 5;
+							if (boost > 0) {
+								score += boost;
+							}
+						}
+					}
+
+					// score is cumulative, so add the score we had before
+					score += es.score;
+				}
+
+				gop.value_ptr.* = EntryScore{
+					.score = score,
+					.word_index = word_index,
+					.ngram_index = ngram_typed,
+				};
+
+				top.update(entry_id, score);
 			}
-
-			gop.value_ptr.* = EntryScore{
-				.score = score,
-				.word_index = word_index,
-				.ngram_index = ngram_index,
-			};
-
-			top.update(entry_id, score);
 		}
 	}
 	return top.rank();
@@ -261,58 +266,58 @@ test "search" {
 	var found : usize = 0;
 	var entries : [MAX_RESULTS]u32 = undefined;
 
-	// {
-	// 	// empty index
-	// 	var index = try Index.init(t.allocator);
-	// 	defer index.deinit();
-	// 	found = try search(t.allocator, "anything", index, &entries);
-	// 	try t.expectEqual(@as(usize, 0), found);
-	// }
+	{
+		// empty index
+		var index = try Index.init(t.allocator);
+		defer index.deinit();
+		found = try search(t.allocator, "anything", index, &entries);
+		try t.expectEqual(@as(usize, 0), found);
+	}
 
-	// {
-	// 	// index with 1 entry
-	// 	var index = try Index.init(t.allocator);
-	// 	defer index.deinit();
-	// 	try index.add(99, "silver needle");
+	{
+		// index with 1 entry
+		var index = try Index.init(t.allocator);
+		defer index.deinit();
+		try index.add(99, "silver needle");
 
-	// 	found = try search(t.allocator, "nope", index, &entries);
-	// 	try t.expectEqual(@as(usize, 0), found);
+		found = try search(t.allocator, "nope", index, &entries);
+		try t.expectEqual(@as(usize, 0), found);
 
-	// 	const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
-	// 	for (inputs) |input| {
-	// 		found = try search(t.allocator, input, index, &entries);
-	// 		try t.expectEqual(found, 1);
-	// 		try t.expectEqual(@as(u32, 99), entries[0]);
-	// 	}
-	// }
+		const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
+		for (inputs) |input| {
+			found = try search(t.allocator, input, index, &entries);
+			try t.expectEqual(found, 1);
+			try t.expectEqual(@as(u32, 99), entries[0]);
+		}
+	}
 
-	// {
-	// 	// index with multiple entries
-	// 	var index = try Index.init(t.allocator);
-	// 	defer index.deinit();
-	// 	try index.add(50, "silver needle");
-	// 	try index.add(60, "keemun");
-	// 	try index.add(70, "iron goddess");
-	// 	try index.add(80, "dragon well");
-	// 	try index.add(90, "yellow mountain");
+	{
+		// index with multiple entries
+		var index = try Index.init(t.allocator);
+		defer index.deinit();
+		try index.add(50, "silver needle");
+		try index.add(60, "keemun");
+		try index.add(70, "iron goddess");
+		try index.add(80, "dragon well");
+		try index.add(90, "yellow mountain");
 
-	// 	found = try search(t.allocator, "nope", index, &entries);
-	// 	try t.expectEqual(@as(usize, 0), found);
+		found = try search(t.allocator, "nope", index, &entries);
+		try t.expectEqual(@as(usize, 0), found);
 
-	// 	found = try search(t.allocator, "kee", index, &entries);
-	// 	try t.expectEqual(found, 1);
-	// 	try t.expectEqual(@as(u32, 60), entries[0]);
+		found = try search(t.allocator, "kee", index, &entries);
+		try t.expectEqual(found, 1);
+		try t.expectEqual(@as(u32, 60), entries[0]);
 
-	// 	found = try search(t.allocator, "yellow", index, &entries);
-	// 	try t.expectEqual(found, 2);
-	// 	try t.expectEqual(@as(u32, 90), entries[0]);
-	// 	try t.expectEqual(@as(u32, 80), entries[1]);
+		found = try search(t.allocator, "yellow", index, &entries);
+		try t.expectEqual(found, 2);
+		try t.expectEqual(@as(u32, 90), entries[0]);
+		try t.expectEqual(@as(u32, 80), entries[1]);
 
-	// 	found = try search(t.allocator, "ell dragon", index, &entries);
-	// 	try t.expectEqual(found, 2);
-	// 	try t.expectEqual(@as(u32, 90), entries[0]);
-	// 	try t.expectEqual(@as(u32, 80), entries[1]);
-	// }
+		found = try search(t.allocator, "ell dragon", index, &entries);
+		try t.expectEqual(found, 2);
+		try t.expectEqual(@as(u32, 90), entries[0]);
+		try t.expectEqual(@as(u32, 80), entries[1]);
+	}
 
 	{
 		var index = try Index.init(t.allocator);

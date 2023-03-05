@@ -9,9 +9,8 @@ const StringHashMap = std.StringHashMap;
 const MAX_WORDS = (1 << @bitSizeOf(Input.WordIndexType)) - 1;
 const MAX_WORD_LENGTH = (1 << @bitSizeOf(Input.NgramIndexType)) - 1;
 
-// Takes an input and provides an iterator over normalized trigram. Every
-// result includes the word, the word_index and the ngram_index (the index in
-// the word where the trigram starts).
+// Takes an input and provides an iterator over normalized word. Every
+// result includes the word and the word_index.
 // Normalizing means ignoring non-alphanumeric (ascii) + lowercasing the input.
 pub const Input = struct {
 	// The raw input. Not normalized, not trimmed. We don't own this.
@@ -28,71 +27,47 @@ pub const Input = struct {
 	// The 0-based number of words we've seen
 	word_count: u3,
 
-	// Input is an iterator, on a call to next() we find a whole word then yield
-	// ngrams. word_state is null if we haven't found a word (or we need to move
-	// on to the next one). word_state is not null if we're currently yielding
-	// ngrams of a word.
-	word_state: ?WordState,
-
 	const Self = @This();
+
+	// the word that we're yielding, which includes the word itself and it's 0-based index
+	const Word = struct {
+		value: []const u8,
+		index: WordIndexType,
+	};
 
 	pub const WordIndexType = u3;
 	pub const NgramIndexType = u5;
-
-	const WordState = struct {
-		// the whole world we're currently yielding
-		word: []const u8,
-
-		// the 0-based index of this word in relation to the whole normalized input
-		word_index: WordIndexType,
-
-		// the index within word to start and take the ngram
-		ngram_index: NgramIndexType,
-	};
 
 	pub fn parse(allocator: Allocator, input: []const u8) !Self {
 		return Input{
 			.input = input,
 			.word_count = 0,
-			.word_state = null,
 			.normalized_position = 0,
 			.normalized = try allocator.alloc(u8, input.len),
 		};
 	}
 
-	// The iterator works by internally finding a word, and then yielding an trigram
-	// at a time of that word.
-	pub fn next(self: *Self) ?WordState {
+
+	pub fn next(self: *Self) ?Word {
 		@setRuntimeSafety(builtin.is_test);
 
-		if (self.word_state) |*ws| {
-			// we've previously found a word, we need to yield the next trigram from it
-			const word = ws.word;
-			const ngram_index = ws.ngram_index;
-			if (ngram_index < word.len - 3) {
-				// yield
-				ws.*.ngram_index += 1;
-				return ws.*;
-			}
-
-			// we only have 2 characters of the word left, set the word_state to null
-			// and go look for the next word
-			self.word_state = null;
-		}
-
-		// we're going to find the next word (and normalize it).
-
-		var normalized = self.normalized;
-
-		var normalized_position = self.normalized_position;
-		var word_start = normalized_position;
-		var input = std.mem.trimLeft(u8, self.input, &ascii.whitespace);
-
-		if (input.len == 0) {
+		var word_count = self.word_count;
+		if (word_count == MAX_WORDS) {
+			// we've reached the max number of words we support per entry
 			return null;
 		}
 
-		var word_count = self.word_count;
+		var input = std.mem.trimLeft(u8, self.input, &ascii.whitespace);
+		if (input.len == 0) {
+			// no more input
+			return null;
+		}
+
+		var normalized = self.normalized;
+		var normalized_position = self.normalized_position;
+		var word_start = normalized_position;
+
+
 		if (word_count > 0) {
 			normalized[normalized_position] = ' ';
 			normalized_position += 1;
@@ -113,29 +88,27 @@ pub const Input = struct {
 			}
 		}
 
-
+		// when next() is called again, we'll start scanning input from where we left off
 		self.input = input[i..];
 		self.normalized_position = normalized_position;
 
-		if (normalized_position - word_start > 2) {
-			var word = normalized[word_start..normalized_position];
-			if (word.len > MAX_WORD_LENGTH) {
-				word = word[0..MAX_WORD_LENGTH];
-			}
-			self.word_state = WordState{
-				.word = word,
-				.ngram_index = 0,
-				.word_index = word_count,
-			};
 
-			if (word_count == MAX_WORDS) {
-				return null;
-			}
-
-			self.word_count = word_count + 1;
-			return self.word_state;
+		if (normalized_position - word_start < 3) {
+			// our "word" is only 1 or 2 characters, skip to the next word
+			// TODO: remove this recursion.
+			return self.next();
 		}
-		return self.next();
+
+		var word = normalized[word_start..normalized_position];
+		if (word.len > MAX_WORD_LENGTH) {
+			word = word[0..MAX_WORD_LENGTH];
+		}
+
+		self.word_count = word_count + 1;
+		return Word{
+			.value = word,
+			.index = word_count,
+		};
 	}
 
 	pub fn getNormalized(self: Self) []const u8 {
@@ -159,7 +132,7 @@ test "parse single word" {
 		try t.expectString("tea", input.value,);
 		try t.expectEqual(@as(u8, 1),input.word_count);
 		try t.expectEqual(@as(usize, 1),input.lookup.count());
-		try input.expectNgram("tea", 0, 0);
+		try input.expectWord("tea", 0);
 	}
 
 	const values = [_][]const u8{
@@ -171,11 +144,8 @@ test "parse single word" {
 		defer input.deinit();
 		try t.expectString(input.value, "keemun");
 		try t.expectEqual(@as(u8, 1),input.word_count);
-		try t.expectEqual(@as(usize, 4),input.lookup.count());
-		try input.expectNgram("kee", 0, 0);
-		try input.expectNgram("eem", 0, 1);
-		try input.expectNgram("emu", 0, 2);
-		try input.expectNgram("mun", 0, 3);
+		try t.expectEqual(@as(usize, 1),input.lookup.count());
+		try input.expectWord("keemun", 0);
 	}
 }
 
@@ -195,12 +165,9 @@ test "parse two word" {
 		defer input.deinit();
 		try t.expectString(input.value, "black bear");
 		try t.expectEqual(@as(u8, 2),input.word_count);
-		try t.expectEqual(@as(usize, 5),input.lookup.count());
-		try input.expectNgram("bla", 0, 0);
-		try input.expectNgram("lac", 0, 1);
-		try input.expectNgram("ack", 0, 2);
-		try input.expectNgram("bea", 1, 0);
-		try input.expectNgram("ear", 1, 1);
+		try t.expectEqual(@as(usize, 2),input.lookup.count());
+		try input.expectWord("black", 0);
+		try input.expectWord("bear", 1);
 	}
 
 	{
@@ -209,10 +176,8 @@ test "parse two word" {
 			defer input.deinit();
 			try t.expectString(input.value, "black at");
 			try t.expectEqual(@as(u8, 1),input.word_count);
-			try t.expectEqual(@as(usize, 3),input.lookup.count());
-			try input.expectNgram("bla", 0, 0);
-			try input.expectNgram("lac", 0, 1);
-			try input.expectNgram("ack", 0, 2);
+			try t.expectEqual(@as(usize, 1),input.lookup.count());
+			try input.expectWord("black", 0);
 	}
 
 	{
@@ -221,11 +186,9 @@ test "parse two word" {
 		defer input.deinit();
 		try t.expectString(input.value, "black a cat");
 		try t.expectEqual(@as(u8, 2),input.word_count);
-		try t.expectEqual(@as(usize, 4),input.lookup.count());
-		try input.expectNgram("bla", 0, 0);
-		try input.expectNgram("lac", 0, 1);
-		try input.expectNgram("ack", 0, 2);
-		try input.expectNgram("cat", 1, 0);
+		try t.expectEqual(@as(usize, 2),input.lookup.count());
+		try input.expectWord("black", 0);
+		try input.expectWord("cat", 1);
 	}
 }
 
@@ -239,32 +202,20 @@ test "stops at 31 character words" {
 		var input = try testCollectInput("0123456789012345678901234567ABC 0123456789012345678901234567VWXYZ");
 		defer input.deinit();
 		try t.expectEqual(@as(u8, 2), input.word_count);
-		try input.expectNgram("abc", 0, 28);
-		try input.expectNgram("vwx", 1, 28);
-		try input.noNgram("wxy");
-		try input.noNgram("xyz");
+		try input.expectWord("0123456789012345678901234567abc", 0);
+		try input.expectWord("0123456789012345678901234567vwx", 1);
 }
 
 const ParseTestResult = struct {
 	value: []const u8,
 	word_count: u8,
-	lookup: StringHashMap(Position),
+	lookup: StringHashMap(Input.WordIndexType),
 
 	const Self = @This();
 
-	const Position = struct {
-		word_index: Input.WordIndexType,
-		ngram_index: Input.NgramIndexType,
-	};
-
-	fn expectNgram(self: Self, ngram: []const u8, word_index: Input.WordIndexType, ngram_index: Input.NgramIndexType) !void {
-		var p = self.lookup.get(ngram) orelse unreachable;
-		try t.expectEqual(word_index, p.word_index);
-		try t.expectEqual(ngram_index, p.ngram_index);
-	}
-
-	fn noNgram(self: Self, ngram: []const u8) !void {
-		try t.expectEqual(false, self.lookup.contains(ngram));
+	fn expectWord(self: Self, word: []const u8, word_index: Input.WordIndexType) !void {
+		var actual = self.lookup.get(word) orelse unreachable;
+		try t.expectEqual(word_index, actual);
 	}
 
 	fn deinit(self: *Self) void {
@@ -275,15 +226,10 @@ const ParseTestResult = struct {
 };
 
 fn testCollectInput(value: []const u8) !ParseTestResult {
-	var lookup = StringHashMap(ParseTestResult.Position).init(t.allocator);
+	var lookup = StringHashMap(Input.WordIndexType).init(t.allocator);
 	var input = try Input.parse(t.allocator, value);
-	while (input.next()) |result| {
-		const ngram_index = result.ngram_index;
-		const ngram = result.word[ngram_index..ngram_index+3];
-		try lookup.put(ngram, ParseTestResult.Position{
-			.word_index = result.word_index,
-			.ngram_index = ngram_index,
-		});
+	while (input.next()) |word| {
+		try lookup.put(word.value, word.index);
 	}
 	return ParseTestResult{
 		.lookup = lookup,
