@@ -26,7 +26,7 @@ pub fn main() !void {
 		try index.add(id, title);
 		id += 1;
 	}
-	print("Load took: {d}ms\n", .{timer.lap() / 1_000_000});
+	print("Load took: {d}us\n", .{timer.lap() / 1_000});
 
 	var results : [zac.MAX_RESULTS]u32 = undefined;
 
@@ -37,8 +37,8 @@ pub fn main() !void {
 			print("didn't find 10 items\n", .{});
 		}
 	}
-	const elapsed = timer.lap() / 1_000_000;
-	print("Search took: {d}ms ({d}ms per loop)\n", .{elapsed, elapsed/100});
+	const elapsed = timer.lap() / 1_000;
+	print("Search took: {d}us ({d}us per loop)\n", .{elapsed, elapsed/100});
 
 	for (results) |r| {
 		print("{d}\n", .{r});
