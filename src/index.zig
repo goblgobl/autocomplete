@@ -1,5 +1,6 @@
 const std = @import("std");
 const t = @import("t.zig");
+const search = @import("search.zig");
 const Input = @import("input.zig").Input;
 
 const ArrayList = std.ArrayList;
@@ -20,6 +21,11 @@ pub const Index = struct {
 			.entries = AutoHashMap(u32, *Entry).init(allocator),
 			.lookup = StringHashMap(ArrayList(NgramInfo)).init(allocator),
 		};
+	}
+
+	pub fn find(self: Self, value: []const u8, entries: *[search.MAX_RESULTS]u32) ![]u32 {
+		const found = try search.search(self.allocator, value, self, entries);
+		return entries[0..found];
 	}
 
 	pub fn add(self: *Self, id: u32, value: []const u8) !void {

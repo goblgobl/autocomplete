@@ -14,10 +14,24 @@ const MAX_WORD_LENGTH = (1 << @bitSizeOf(Input.NgramIndexType)) - 1;
 // the word where the trigram starts).
 // Normalizing means ignoring non-alphanumeric (ascii) + lowercasing the input.
 pub const Input = struct {
+	// The raw input. Not normalized, not trimmed. We don't own this.
 	input: []const u8,
-	normalized_position: u32,
+
+	// The normalized input. We own this, but if this is being called when adding
+	// an item to the Index, the Index will take over this.
 	normalized: []u8,
+
+	// We normalize one character at a time, and this in where in normalized that
+	// we're at. The final normalized.len will always be <= input.len.
+	normalized_position: u32,
+
+	// The 0-based number of words we've seen
 	word_count: u3,
+
+	// Input is an iterator, on a call to next() we find a whole word then yield
+	// ngrams. word_state is null if we haven't found a word (or we need to move
+	// on to the next one). word_state is not null if we're currently yielding
+	// ngrams of a word.
 	word_state: ?WordState,
 
 	const Self = @This();
@@ -26,8 +40,13 @@ pub const Input = struct {
 	pub const NgramIndexType = u5;
 
 	const WordState = struct {
+		// the whole world we're currently yielding
 		word: []const u8,
+
+		// the 0-based index of this word in relation to the whole normalized input
 		word_index: WordIndexType,
+
+		// the index within word to start and take the ngram
 		ngram_index: NgramIndexType,
 	};
 
