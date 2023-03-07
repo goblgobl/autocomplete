@@ -2,9 +2,9 @@ const std = @import("std");
 const c = @cImport(@cInclude("lmdb.h"));
 const t = @import("t.zig");
 
-pub const Kv = struct {
-	env: ?*c.MDB_env,
+pub const DB = struct {
 	dbi: c_uint,
+	env: ?*c.MDB_env,
 
 	const Self = @This();
 
@@ -81,14 +81,14 @@ pub const Kv = struct {
 		}
 		errdefer c.mdb_env_close(env);
 
-		result = c.mdb_env_open(env, path.ptr, c.MDB_NOSUBDIR | c.MDB_NOMETASYNC, 0o600);
+		result = c.mdb_env_open(env, path.ptr, c.MDB_NOSUBDIR | c.MDB_NOMETASYNC | c.MDB_NOTLS, 0o600);
 		if (result != 0) {
 			return errorFromCode(result);
 		}
 
-		var kv = Kv{.env = env, .dbi = 0};
+		var db = DB{.env = env, .dbi = 0};
 
-		const tx = try kv.writeTx();
+		const tx = try db.writeTx();
 		errdefer tx.abort();
 
 		var dbi: c.MDB_dbi = 0;
@@ -98,8 +98,8 @@ pub const Kv = struct {
 		}
 		try tx.commit();
 
-		kv.dbi = dbi;
-		return kv;
+		db.dbi = dbi;
+		return db;
 	}
 
 	pub fn deinit(self: Self) void {
@@ -213,19 +213,20 @@ fn errorFromCode(result: c_int) anyerror {
 }
 
 test "iterator no match" {
-	defer t.cleanup();
-	const kv = try Kv.init("tests/db");
+	t.cleanup();
+	const kv = try DB.init("tests/db");
 	defer kv.deinit();
 
 	var it = try kv.iterate("does-not-exist");
 	defer it.deinit();
-	try t.expectEqual(@as(?Kv.Entry, null), try it.next());
+	try t.expectEqual(@as(?DB.Entry, null), try it.next());
 }
 
 test "iterator" {
 	t.cleanup();
-	const kv = try Kv.init("tests/db");
+	const kv = try DB.init("tests/db");
 	defer kv.deinit();
+	try kv.put("ka0", "v0");
 	try kv.put("ke1", "v1");
 	try kv.put("ke2", "v2");
 	try kv.put("ke3", "v3");
@@ -246,5 +247,11 @@ test "iterator" {
 	try t.expectString(entry.key, "ke3");
 	try t.expectString(entry.value, "v3");
 
-	try t.expectEqual(@as(?Kv.Entry, null), try it.next());
+	try t.expectEqual(@as(?DB.Entry, null), try it.next());
 }
+
+
+//idx:ID -> index_config
+//ID:p:id -> payload
+//ID:i:id -> term
+//ID:x:external-id ->

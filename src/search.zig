@@ -23,7 +23,7 @@ const EntryScore = struct {
 	ngram_index: ac.NgramIndex,
 };
 
-pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[ac.MAX_RESULTS]ac.Id) !usize {
+pub fn search(a: Allocator, value: []const u8, idx: Index, top_entries: *[ac.MAX_RESULTS]ac.Id) !usize {
 	var arena = std.heap.ArenaAllocator.init(a);
 	defer arena.deinit();
 	const allocator = arena.allocator();
@@ -31,7 +31,7 @@ pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[ac.M
 	var input = try Input.parse(allocator, value);
 
 	// we're getting matches from here
-	var lookup = index.lookup;
+	var lookup = idx.lookup;
 
 	// and we're accumulating scores here
 	var accumulator = AutoHashMap(ac.Id, EntryScore).init(allocator);
@@ -268,24 +268,24 @@ test "search" {
 
 	{
 		// empty index
-		var index = try Index.init(t.allocator);
-		defer index.deinit();
-		found = try search(t.allocator, "anything", index, &entries);
+		var idx = Index.init(t.allocator, Index.Config{.id = 0});
+		defer idx.deinit();
+		found = try search(t.allocator, "anything", idx, &entries);
 		try t.expectEqual(@as(usize, 0), found);
 	}
 
 	{
 		// index with 1 entry
-		var index = try Index.init(t.allocator);
-		defer index.deinit();
-		try index.add(99, "silver needle");
+		var idx = Index.init(t.allocator, Index.Config{.id = 0});
+		defer idx.deinit();
+		try idx.add(99, "silver needle");
 
-		found = try search(t.allocator, "nope", index, &entries);
+		found = try search(t.allocator, "nope", idx, &entries);
 		try t.expectEqual(@as(usize, 0), found);
 
 		const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
 		for (inputs) |input| {
-			found = try search(t.allocator, input, index, &entries);
+			found = try search(t.allocator, input, idx, &entries);
 			try t.expectEqual(found, 1);
 			try t.expectEqual(@as(u32, 99), entries[0]);
 		}
@@ -293,38 +293,38 @@ test "search" {
 
 	{
 		// index with multiple entries
-		var index = try Index.init(t.allocator);
-		defer index.deinit();
-		try index.add(50, "silver needle");
-		try index.add(60, "keemun");
-		try index.add(70, "iron goddess");
-		try index.add(80, "dragon well");
-		try index.add(90, "yellow mountain");
+		var idx = Index.init(t.allocator, Index.Config{.id = 0});
+		defer idx.deinit();
+		try idx.add(50, "silver needle");
+		try idx.add(60, "keemun");
+		try idx.add(70, "iron goddess");
+		try idx.add(80, "dragon well");
+		try idx.add(90, "yellow mountain");
 
-		found = try search(t.allocator, "nope", index, &entries);
+		found = try search(t.allocator, "nope", idx, &entries);
 		try t.expectEqual(@as(usize, 0), found);
 
-		found = try search(t.allocator, "kee", index, &entries);
+		found = try search(t.allocator, "kee", idx, &entries);
 		try t.expectEqual(found, 1);
 		try t.expectEqual(@as(u32, 60), entries[0]);
 
-		found = try search(t.allocator, "yellow", index, &entries);
+		found = try search(t.allocator, "yellow", idx, &entries);
 		try t.expectEqual(found, 2);
 		try t.expectEqual(@as(u32, 90), entries[0]);
 		try t.expectEqual(@as(u32, 80), entries[1]);
 
-		found = try search(t.allocator, "ell dragon", index, &entries);
+		found = try search(t.allocator, "ell dragon", idx, &entries);
 		try t.expectEqual(found, 2);
 		try t.expectEqual(@as(u32, 90), entries[0]);
 		try t.expectEqual(@as(u32, 80), entries[1]);
 	}
 
 	{
-		var index = try Index.init(t.allocator);
-		defer index.deinit();
-		try index.add(50, "among famous books");
+		var idx = Index.init(t.allocator, Index.Config{.id = 0});
+		defer idx.deinit();
+		try idx.add(50, "among famous books");
 
-		found = try search(t.allocator, "mon amour", index, &entries);
+		found = try search(t.allocator, "mon amour", idx, &entries);
 		try t.expectEqual(found, 1);
 	}
 

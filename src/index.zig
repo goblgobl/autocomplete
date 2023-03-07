@@ -11,14 +11,20 @@ const AutoHashMap = std.AutoHashMap;
 const StringHashMap = std.StringHashMap;
 
 pub const Index = struct {
+	id: ac.Id,
 	allocator: Allocator,
 	entries: AutoHashMap(ac.Id, *Entry),
 	lookup: StringHashMap(ArrayList(NgramInfo)),
 
 	const Self = @This();
 
-	pub fn init(allocator: Allocator) !Index {
+	pub const Config = struct {
+		id: ac.Id,
+	};
+
+	pub fn init(allocator: Allocator, config: Config) Index {
 		return Index{
+			.id = config.id,
 			.allocator = allocator,
 			.entries = AutoHashMap(ac.Id, *Entry).init(allocator),
 			.lookup = StringHashMap(ArrayList(NgramInfo)).init(allocator),
@@ -106,7 +112,7 @@ const NgramInfo = struct {
 
 test "index add" {
 	{
-		var db = try Index.init(t.allocator);
+		var db = Index.init(t.allocator, Index.Config{.id = 0});
 		defer db.deinit();
 		try t.expectEqual(db.count(), 0);
 

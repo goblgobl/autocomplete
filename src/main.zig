@@ -8,13 +8,12 @@ const Allocator = std.mem.Allocator;
 pub fn main() !void {
 	var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 	const allocator = gpa.allocator();
+
 	const config = try readConfig(allocator, "config.json");
 	defer config.deinit(allocator);
 
 	try ac.setup(allocator, config);
-
-	std.debug.print("{s}\n", .{config.db orelse "hello"});
-
+	defer ac.deinit(allocator);
 }
 
 fn readConfig(allocator: Allocator, path: []const u8) !ac.Config {
