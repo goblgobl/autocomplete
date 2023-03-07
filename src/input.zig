@@ -1,13 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+
 const t = @import("t.zig");
+const ac = @import("autocomplete.zig");
 
 const ascii = std.ascii;
 const Allocator = std.mem.Allocator;
 const StringHashMap = std.StringHashMap;
-
-const MAX_WORDS = (1 << @bitSizeOf(Input.WordIndexType)) - 1;
-const MAX_WORD_LENGTH = (1 << @bitSizeOf(Input.NgramIndexType)) - 1;
 
 // Takes an input and provides an iterator over normalized word. Every
 // result includes the word and the word_index.
@@ -32,11 +31,8 @@ pub const Input = struct {
 	// the word that we're yielding, which includes the word itself and it's 0-based index
 	const Word = struct {
 		value: []const u8,
-		index: WordIndexType,
+		index: ac.WordIndex,
 	};
-
-	pub const WordIndexType = u3;
-	pub const NgramIndexType = u5;
 
 	pub fn parse(allocator: Allocator, input: []const u8) !Self {
 		return Input{
@@ -52,7 +48,7 @@ pub const Input = struct {
 		@setRuntimeSafety(builtin.is_test);
 
 		var word_count = self.word_count;
-		if (word_count == MAX_WORDS) {
+		if (word_count == ac.MAX_WORDS) {
 			// we've reached the max number of words we support per entry
 			return null;
 		}
@@ -100,8 +96,8 @@ pub const Input = struct {
 		}
 
 		var word = normalized[word_start..normalized_position];
-		if (word.len > MAX_WORD_LENGTH) {
-			word = word[0..MAX_WORD_LENGTH];
+		if (word.len > ac.MAX_WORD_LENGTH) {
+			word = word[0..ac.MAX_WORD_LENGTH];
 		}
 
 		self.word_count = word_count + 1;
@@ -209,11 +205,11 @@ test "stops at 31 character words" {
 const ParseTestResult = struct {
 	value: []const u8,
 	word_count: u8,
-	lookup: StringHashMap(Input.WordIndexType),
+	lookup: StringHashMap(ac.WordIndex),
 
 	const Self = @This();
 
-	fn expectWord(self: Self, word: []const u8, word_index: Input.WordIndexType) !void {
+	fn expectWord(self: Self, word: []const u8, word_index: ac.WordIndex) !void {
 		var actual = self.lookup.get(word) orelse unreachable;
 		try t.expectEqual(word_index, actual);
 	}
@@ -226,7 +222,7 @@ const ParseTestResult = struct {
 };
 
 fn testCollectInput(value: []const u8) !ParseTestResult {
-	var lookup = StringHashMap(Input.WordIndexType).init(t.allocator);
+	var lookup = StringHashMap(ac.WordIndex).init(t.allocator);
 	var input = try Input.parse(t.allocator, value);
 	while (input.next()) |word| {
 		try lookup.put(word.value, word.index);

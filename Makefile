@@ -1,10 +1,8 @@
-F="zac.zig"
-
 .PHONY: t
 t:
-	zig test ${F}
+	zig build test
 
 
 .PHONY: s
 s:
-	zig run main.zig
+	zig build run -freference-trace

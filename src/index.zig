@@ -1,5 +1,7 @@
 const std = @import("std");
 const t = @import("t.zig");
+
+const ac = @import("autocomplete.zig");
 const search = @import("search.zig");
 const Input = @import("input.zig").Input;
 
@@ -10,7 +12,7 @@ const StringHashMap = std.StringHashMap;
 
 pub const Index = struct {
 	allocator: Allocator,
-	entries: AutoHashMap(u32, *Entry),
+	entries: AutoHashMap(ac.Id, *Entry),
 	lookup: StringHashMap(ArrayList(NgramInfo)),
 
 	const Self = @This();
@@ -18,17 +20,17 @@ pub const Index = struct {
 	pub fn init(allocator: Allocator) !Index {
 		return Index{
 			.allocator = allocator,
-			.entries = AutoHashMap(u32, *Entry).init(allocator),
+			.entries = AutoHashMap(ac.Id, *Entry).init(allocator),
 			.lookup = StringHashMap(ArrayList(NgramInfo)).init(allocator),
 		};
 	}
 
-	pub fn find(self: Self, value: []const u8, entries: *[search.MAX_RESULTS]u32) ![]u32 {
+	pub fn find(self: Self, value: []const u8, entries: *[ac.MAX_RESULTS]ac.Id) ![]ac.Id {
 		const found = try search.search(self.allocator, value, self, entries);
 		return entries[0..found];
 	}
 
-	pub fn add(self: *Self, id: u32, value: []const u8) !void {
+	pub fn add(self: *Self, id: ac.Id, value: []const u8) !void {
 		std.debug.assert(value.len < 255);
 
 		const allocator = self.allocator;
@@ -45,7 +47,7 @@ pub const Index = struct {
 				const np = NgramInfo{
 					.entry_id = id,
 					.word_index = result.index,
-					.ngram_index = @intCast(Input.NgramIndexType, ngram_index),
+					.ngram_index = @intCast(ac.NgramIndex, ngram_index),
 				};
 
 				const ngram = word[ngram_index..ngram_index+3];
@@ -91,15 +93,15 @@ pub const Index = struct {
 };
 
 const Entry = struct {
-	id: u32,
+	id: ac.Id,
 	word_count: u8,
 	value: []const u8,
 };
 
 const NgramInfo = struct {
-	entry_id: u32,
-	word_index: Input.WordIndexType,
-	ngram_index: Input.NgramIndexType,
+	entry_id: ac.Id,
+	word_index: ac.WordIndex,
+	ngram_index: ac.NgramIndex,
 };
 
 test "index add" {
@@ -121,12 +123,12 @@ test "index add" {
 
 		const hits = db.lookup.get("ver").?;
 		try t.expectEqual(@as(usize, 2), hits.items.len);
-		try t.expectEqual(@as(u32, 1), hits.items[0].entry_id);
-		try t.expectEqual(@as(Input.WordIndexType, 0), hits.items[0].word_index);
-		try t.expectEqual(@as(Input.NgramIndexType, 3), hits.items[0].ngram_index);
+		try t.expectEqual(@as(ac.Id, 1), hits.items[0].entry_id);
+		try t.expectEqual(@as(ac.WordIndex, 0), hits.items[0].word_index);
+		try t.expectEqual(@as(ac.NgramIndex, 3), hits.items[0].ngram_index);
 
-		try t.expectEqual(@as(u32, 3), hits.items[1].entry_id);
-		try t.expectEqual(@as(Input.WordIndexType, 1), hits.items[1].word_index);
-		try t.expectEqual(@as(Input.NgramIndexType, 2), hits.items[1].ngram_index);
+		try t.expectEqual(@as(ac.Id, 3), hits.items[1].entry_id);
+		try t.expectEqual(@as(ac.WordIndex, 1), hits.items[1].word_index);
+		try t.expectEqual(@as(ac.NgramIndex, 2), hits.items[1].ngram_index);
 	}
 }

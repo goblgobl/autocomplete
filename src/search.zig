@@ -1,6 +1,7 @@
 const std = @import("std");
 const t = @import("t.zig");
 
+const ac = @import("autocomplete.zig");
 const Index = @import("index.zig").Index;
 const Input = @import("input.zig").Input;
 
@@ -8,7 +9,6 @@ const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
 const Allocator = std.mem.Allocator;
 
-pub const MAX_RESULTS = 10;
 const abs = std.math.abs;
 
 // the entry_id is the key in our map
@@ -17,16 +17,16 @@ const EntryScore = struct {
 	score: u16,
 
 	// the word_index of our last match
-	word_index: Input.WordIndexType,
+	word_index: ac.WordIndex,
 
 	// the ngram_index of our last match
-	ngram_index: Input.NgramIndexType,
+	ngram_index: ac.NgramIndex,
 };
 
-pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[MAX_RESULTS]u32) !usize {
+pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[ac.MAX_RESULTS]ac.Id) !usize {
 	var arena = std.heap.ArenaAllocator.init(a);
 	defer arena.deinit();
-  const allocator = arena.allocator();
+	const allocator = arena.allocator();
 
 	var input = try Input.parse(allocator, value);
 
@@ -34,7 +34,7 @@ pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[MAX_
 	var lookup = index.lookup;
 
 	// and we're accumulating scores here
-	var accumulator = AutoHashMap(u32, EntryScore).init(allocator);
+	var accumulator = AutoHashMap(ac.Id, EntryScore).init(allocator);
 
 	// top scores/entries are mantained here
 	var top = try Top.init(allocator, top_entries);
@@ -50,9 +50,9 @@ pub fn search(a: Allocator, value: []const u8, index: Index, top_entries: *[MAX_
 			// this can't all be necessary, can it?
 			const word_index_i32 = @as(i32, word_index);
 			const ngram_index_i32 = @intCast(i32, ngram_index);
-			const ngram_typed = @intCast(Input.NgramIndexType, ngram_index);
+			const ngram_typed = @intCast(ac.NgramIndex, ngram_index);
 
-			var last_entry_id: u32 = 0;
+			var last_entry_id: ac.Id = 0;
 			for (hits.items) |hit| {
 				const entry_id = hit.entry_id;
 
@@ -162,32 +162,32 @@ const Top = struct {
 	low_index: u8,
 
 	// The list of top scores. This is not sorted
-	scores: [MAX_RESULTS]u16,
+	scores: [ac.MAX_RESULTS]u16,
 
 	// The entry_ids corresponding to each score. Say entry_id 32 has a top score
 	// at index 4, so: entries[4] == 32. Then its score is at scores[4].
 	// Once rank() is called the scores and entries indexes are no longer consistent.
-	entries: *[MAX_RESULTS]u32,
+	entries: *[ac.MAX_RESULTS]ac.Id,
 
 	// entry => index lookup. Following the above example, entra_lookup[32] == 4
-	entry_lookup: AutoHashMap(u32, u8),
+	entry_lookup: AutoHashMap(ac.Id, u8),
 
 	const Self = @This();
 
-	fn init(allocator: Allocator, entries: *[MAX_RESULTS]u32) !Top {
-		var entry_lookup = AutoHashMap(u32, u8).init(allocator);
-		try entry_lookup.ensureTotalCapacity(MAX_RESULTS);
+	fn init(allocator: Allocator, entries: *[ac.MAX_RESULTS]ac.Id) !Top {
+		var entry_lookup = AutoHashMap(ac.Id, u8).init(allocator);
+		try entry_lookup.ensureTotalCapacity(ac.MAX_RESULTS);
 
 		return Top{
 			.low_score = 0,
 			.low_index = 0,
 			.entries = entries,
-			.scores = [_]u16{0} ** MAX_RESULTS,
+			.scores = [_]u16{0} ** ac.MAX_RESULTS,
 			.entry_lookup = entry_lookup,
 		};
 	}
 
-	fn update(self: *Self, entry_id: u32, new_score: u16) void {
+	fn update(self: *Self, entry_id: ac.Id, new_score: u16) void {
 		var scores = &self.scores;
 		var low_score = self.low_score;
 		var low_index = self.low_index;
@@ -264,7 +264,7 @@ const Top = struct {
 
 test "search" {
 	var found : usize = 0;
-	var entries : [MAX_RESULTS]u32 = undefined;
+	var entries : [ac.MAX_RESULTS]u32 = undefined;
 
 	{
 		// empty index
@@ -331,7 +331,7 @@ test "search" {
 }
 
 test "top" {
-	var entries : [MAX_RESULTS]u32 = undefined;
+	var entries : [ac.MAX_RESULTS]u32 = undefined;
 	{
 		// single result
 		var top = try Top.init(t.allocator, &entries);
