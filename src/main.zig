@@ -92,7 +92,6 @@ test "readConfig" {
 		defer config.deinit(t.allocator);
 
 		try t.expectString("/tmp/autocomplete.db", config.db.?);
-		try t.expectString("127.0.0.1:4001", config.admin.?);
 		try t.expectString("127.0.0.1:4000", config.listen.?);
 	}
 
@@ -101,7 +100,6 @@ test "readConfig" {
 		defer config.deinit(t.allocator);
 
 		try t.expectEqual(@as(?[]const u8, null), config.db);
-		try t.expectEqual(@as(?[]const u8, null), config.admin);
 		try t.expectEqual(@as(?[]const u8, null), config.listen);
 	}
 }

@@ -50,7 +50,6 @@ fn createIndex(allocator: Allocator, json: []const u8) !Index {
 
 pub const Config = struct {
 	db: ?[]const u8 = null,
-	admin: ?[]const u8 = null,
 	listen: ?[]const u8 = null,
 
 	const Self = @This();
@@ -58,9 +57,6 @@ pub const Config = struct {
 	pub fn deinit(self: Self, allocator: Allocator) void {
 		if (self.db) |db_path| {
 			allocator.free(db_path);
-		}
-		if (self.admin) |admin| {
-			allocator.free(admin);
 		}
 		if (self.listen) |listen| {
 			allocator.free(listen);
