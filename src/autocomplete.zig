@@ -44,23 +44,7 @@ fn createIndex(allocator: Allocator, json: []const u8) !Index {
 	const index_config = try std.json.parse(Index.Config, &stream, .{});
 
 	var idx = Index.init(allocator, index_config);
-	const index_id = idx.id;
-
-	// $index_id:i:
-	const term_prefix = [_]u8 {
-		@intCast(u8, (index_id >> 24) & 0xFF),
-		@intCast(u8, (index_id >> 16) & 0xFF),
-		@intCast(u8, (index_id >> 8) & 0xFF),
-		@intCast(u8, index_id & 0xFF),
-		':', 'i', ':'};
-
-	var it = try db.iterate(term_prefix[0..]);
-	defer it.deinit();
-	while (try it.next()) |entry| {
-		const k = entry.key[7..]; // strip out the $index_id:i:
-		const id : Id = @intCast(u32, k[0])<<24 | @intCast(u32, k[1])<<16 | @intCast(u32, k[2])<<8 | @intCast(u32, k[3]);
-		try idx.add(id, entry.value);
-	}
+	try idx.populateFromDb(db);
 	return idx;
 }
 
