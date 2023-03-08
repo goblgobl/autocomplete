@@ -2,6 +2,7 @@ const std = @import("std");
 
 const t = @import("t.zig");
 const ac = @import("autocomplete.zig");
+const zhp = @import("zhp");
 
 const Allocator = std.mem.Allocator;
 
@@ -9,17 +10,30 @@ pub fn main() !void {
 	var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 	const allocator = gpa.allocator();
 
-	const config = try readConfig(allocator, "config.json");
+	var config_file: []const u8 = "config.json";
+	var it = std.process.args();
+	_ = it.next(); // skip executable
+	if (it.next()) |arg| {
+		config_file = arg;
+	}
+
+	const config = try readConfig(allocator, config_file);
 	defer config.deinit(allocator);
 
 	try ac.setup(allocator, config);
 	defer ac.deinit(allocator);
+
+	var app = zhp.Application.init(allocator, .{ .debug = true });
+
+	defer app.deinit();
+	try app.listen("127.0.0.1", 9000);
+	try app.start();
 }
 
 fn readConfig(allocator: Allocator, path: []const u8) !ac.Config {
 	const data = std.fs.cwd().readFileAlloc(allocator, path, 4096) catch |err| {
 		if (err == error.FileNotFound) {
-				std.log.warn("'config.json' not found", .{});
+				std.log.warn("'{s}' not found", .{path});
 		}
 		return err;
 	};

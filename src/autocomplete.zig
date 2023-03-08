@@ -49,7 +49,7 @@ fn createIndex(allocator: Allocator, json: []const u8) !Index {
 }
 
 pub const Config = struct {
-	db: ?[]const u8 = null,
+	db: ?[:0]const u8 = null,
 	listen: ?[]const u8 = null,
 
 	const Self = @This();

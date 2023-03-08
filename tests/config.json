@@ -1,5 +1,4 @@
 {
 	"db": "/tmp/autocomplete.db",
-	"admin": "127.0.0.1:4001",
 	"listen": "127.0.0.1:4000"
 }
