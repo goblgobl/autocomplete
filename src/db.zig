@@ -9,6 +9,7 @@ pub const DB = struct {
 	const Self = @This();
 
 	const Tx = struct {
+		dbi: c_uint,
 		txn: ?*c.MDB_txn,
 
 		pub fn abort(self: Tx) void {
@@ -20,6 +21,28 @@ pub const DB = struct {
 			if (result != 0) {
 				return errorFromCode(result);
 			}
+		}
+
+		pub fn put(self: Tx, key: []const u8, value: []const u8) !void {
+			var key_val = toMDBVal(key);
+			var value_val = toMDBVal(value);
+			const result = c.mdb_put(self.txn, self.dbi, &key_val, &value_val, 0);
+			if (result != 0) {
+				return errorFromCode(result);
+			}
+		}
+
+		pub fn get(self: Tx, key: []const u8) !?[]const u8 {
+			var key_val = toMDBVal(key);
+			var value_val: c.MDB_val = undefined;
+			const result = c.mdb_get(self.txn, self.dbi, &key_val, &value_val);
+			if (result != 0) {
+				if (result == c.MDB_NOTFOUND) {
+					return null;
+				}
+				return errorFromCode(result);
+			}
+			return fromMDBVal(value_val);
 		}
 	};
 
@@ -114,7 +137,7 @@ pub const DB = struct {
 			return errorFromCode(result);
 		}
 
-		return Tx{.txn = txn};
+		return Tx{.txn = txn, .dbi = self.dbi};
 	}
 
 	pub fn readTx(self: Self) !Tx{
@@ -125,7 +148,7 @@ pub const DB = struct {
 			return errorFromCode(result);
 		}
 
-		return Tx{.txn = txn};
+		return Tx{.txn = txn, .dbi = self.dbi};
 	}
 
 	pub fn iterate(self: Self, prefix: []const u8) !Iterator {
@@ -149,13 +172,7 @@ pub const DB = struct {
 	pub fn put(self: Self, key: []const u8, value: []const u8) !void {
 		const tx = try self.writeTx();
 		errdefer tx.abort();
-
-		var key_val = toMDBVal(key);
-		var value_val = toMDBVal(value);
-		const result = c.mdb_put(tx.txn, self.dbi, &key_val, &value_val, 0);
-		if (result != 0) {
-			return errorFromCode(result);
-		}
+		try tx.put(key, value);
 		try tx.commit();
 	}
 };
@@ -212,7 +229,7 @@ fn errorFromCode(result: c_int) anyerror {
 	};
 }
 
-test "iterator no match" {
+test "iterator: no match" {
 	t.cleanup();
 	const kv = try DB.init("tests/db");
 	defer kv.deinit();
@@ -222,7 +239,7 @@ test "iterator no match" {
 	try t.expectEqual(@as(?DB.Entry, null), try it.next());
 }
 
-test "iterator" {
+test "iterator: matches" {
 	t.cleanup();
 	const kv = try DB.init("tests/db");
 	defer kv.deinit();
@@ -250,6 +267,30 @@ test "iterator" {
 	try t.expectEqual(@as(?DB.Entry, null), try it.next());
 }
 
+test "get/put" {
+	t.cleanup();
+	const kv = try DB.init("tests/db");
+	defer kv.deinit();
+
+	try kv.put("key1", "val1a");
+	try kv.put("key2", "val2a");
+	{
+		var tx = try kv.writeTx();
+		errdefer tx.abort();
+		try tx.put("key2", "val2b");
+		try tx.put("key3", "val3a");
+		try tx.commit();
+	}
+
+	{
+		var tx = try kv.readTx();
+		defer tx.abort();
+		try t.expectString("val1a", (try tx.get("key1")).?);
+		try t.expectString("val2b", (try tx.get("key2")).?);
+		try t.expectString("val3a", (try tx.get("key3")).?);
+		try t.expectEqual(@as(?[]const u8, null), try tx.get("key4"));
+	}
+}
 
 //idx:ID -> index_config
 //ID:p:id -> payload

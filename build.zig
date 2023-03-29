@@ -3,23 +3,26 @@ const std = @import("std");
 const ModuleMap = std.StringArrayHashMap(*std.Build.Module);
 
 pub fn build(b: *std.Build) !void {
-	var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-	const allocator = gpa.allocator();
-
 	const target = b.standardTargetOptions(.{});
 	const optimize = b.standardOptimizeOption(.{});
 
-	const package_names = [_][]const u8{"zhp"};
+	var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+	const allocator = gpa.allocator();
+
 	var modules = ModuleMap.init(allocator);
 	defer modules.deinit();
+	try modules.put("httpz", b.addModule("zhp", .{
+		.source_file = .{ .path = "lib/http.zig/src/httpz.zig" },
+	}));
 
-	for (package_names) |name| {
-		const pkg = b.dependency(name, .{
-			.target = target,
-			.optimize = optimize,
-		});
-		try modules.put(name, pkg.module(name));
-	}
+	// const package_names = [_][]const u8{};
+	// for (package_names) |name| {
+	// 	const pkg = b.dependency(name, .{
+	// 		.target = target,
+	// 		.optimize = optimize,
+	// 	});
+	// 	try modules.put(name, pkg.module(name));
+	// }
 
 	// setup executable
 	const exe = b.addExecutable(.{
@@ -29,6 +32,7 @@ pub fn build(b: *std.Build) !void {
 		.optimize = optimize,
 	});
 	addLibs(exe, modules);
+	exe.linkSystemLibrary("c");
 	exe.install();
 
 	const run_cmd = exe.run();
@@ -46,10 +50,13 @@ pub fn build(b: *std.Build) !void {
 		.target = target,
 		.optimize = optimize,
 	});
+
 	addLibs(tests, modules);
+	var tests_run = tests.run();
+	tests_run.has_side_effects = true;
 
 	const test_step = b.step("test", "Run tests");
-	test_step.dependOn(&tests.step);
+	test_step.dependOn(&tests_run.step);
 }
 
 fn addLibs(step: *std.Build.CompileStep, modules: ModuleMap) void {

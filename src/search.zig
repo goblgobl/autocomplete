@@ -23,7 +23,7 @@ const EntryScore = struct {
 	ngram_index: ac.NgramIndex,
 };
 
-pub fn search(a: Allocator, value: []const u8, idx: Index, top_entries: *[ac.MAX_RESULTS]ac.Id) !usize {
+pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdCollector) !usize {
 	var arena = std.heap.ArenaAllocator.init(a);
 	defer arena.deinit();
 	const allocator = arena.allocator();
@@ -167,14 +167,14 @@ const Top = struct {
 	// The entry_ids corresponding to each score. Say entry_id 32 has a top score
 	// at index 4, so: entries[4] == 32. Then its score is at scores[4].
 	// Once rank() is called the scores and entries indexes are no longer consistent.
-	entries: *[ac.MAX_RESULTS]ac.Id,
+	entries: *ac.IdCollector,
 
 	// entry => index lookup. Following the above example, entra_lookup[32] == 4
 	entry_lookup: AutoHashMap(ac.Id, u8),
 
 	const Self = @This();
 
-	fn init(allocator: Allocator, entries: *[ac.MAX_RESULTS]ac.Id) !Top {
+	fn init(allocator: Allocator, entries: *ac.IdCollector) !Top {
 		var entry_lookup = AutoHashMap(ac.Id, u8).init(allocator);
 		try entry_lookup.ensureTotalCapacity(ac.MAX_RESULTS);
 
@@ -270,7 +270,7 @@ test "search" {
 		// empty index
 		var idx = Index.init(t.allocator, Index.Config{.id = 0});
 		defer idx.deinit();
-		found = try search(t.allocator, "anything", idx, &entries);
+		found = try search(t.allocator, "anything", &idx, &entries);
 		try t.expectEqual(@as(usize, 0), found);
 	}
 
@@ -280,12 +280,12 @@ test "search" {
 		defer idx.deinit();
 		try idx.add(99, "silver needle");
 
-		found = try search(t.allocator, "nope", idx, &entries);
+		found = try search(t.allocator, "nope", &idx, &entries);
 		try t.expectEqual(@as(usize, 0), found);
 
 		const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
 		for (inputs) |input| {
-			found = try search(t.allocator, input, idx, &entries);
+			found = try search(t.allocator, input, &idx, &entries);
 			try t.expectEqual(found, 1);
 			try t.expectEqual(@as(u32, 99), entries[0]);
 		}
@@ -301,19 +301,19 @@ test "search" {
 		try idx.add(80, "dragon well");
 		try idx.add(90, "yellow mountain");
 
-		found = try search(t.allocator, "nope", idx, &entries);
+		found = try search(t.allocator, "nope", &idx, &entries);
 		try t.expectEqual(@as(usize, 0), found);
 
-		found = try search(t.allocator, "kee", idx, &entries);
+		found = try search(t.allocator, "kee", &idx, &entries);
 		try t.expectEqual(found, 1);
 		try t.expectEqual(@as(u32, 60), entries[0]);
 
-		found = try search(t.allocator, "yellow", idx, &entries);
+		found = try search(t.allocator, "yellow", &idx, &entries);
 		try t.expectEqual(found, 2);
 		try t.expectEqual(@as(u32, 90), entries[0]);
 		try t.expectEqual(@as(u32, 80), entries[1]);
 
-		found = try search(t.allocator, "ell dragon", idx, &entries);
+		found = try search(t.allocator, "ell dragon", &idx, &entries);
 		try t.expectEqual(found, 2);
 		try t.expectEqual(@as(u32, 90), entries[0]);
 		try t.expectEqual(@as(u32, 80), entries[1]);
@@ -324,10 +324,9 @@ test "search" {
 		defer idx.deinit();
 		try idx.add(50, "among famous books");
 
-		found = try search(t.allocator, "mon amour", idx, &entries);
+		found = try search(t.allocator, "mon amour", &idx, &entries);
 		try t.expectEqual(found, 1);
 	}
-
 }
 
 test "top" {

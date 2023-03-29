@@ -112,7 +112,7 @@ pub const Input = struct {
 	}
 };
 
-test "parse single word" {
+test "input: parse single word" {
 	{
 		// 2 letter word
 		var input = try testCollectInput("hi");
@@ -145,7 +145,7 @@ test "parse single word" {
 	}
 }
 
-test "parse two word" {
+test "input: parse two word" {
 	const values = [_][]const u8{
 		"black bear",
 		" black bear",
@@ -188,13 +188,13 @@ test "parse two word" {
 	}
 }
 
-test "stops at 8 words" {
+test "input: stops at 8 words" {
 		var input = try testCollectInput("wrd1 wrd2 wrd3 wrd4 wrd5 wrd6 wrd7 wrd8 wrd9");
 		defer input.deinit();
 		try t.expectEqual(@as(u8, 7), input.word_count);
 }
 
-test "stops at 31 character words" {
+test "input: stops at 31 character words" {
 		var input = try testCollectInput("0123456789012345678901234567ABC 0123456789012345678901234567VWXYZ");
 		defer input.deinit();
 		try t.expectEqual(@as(u8, 2), input.word_count);

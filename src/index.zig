@@ -33,16 +33,10 @@ pub const Index = struct {
 	}
 
 	pub fn populateFromDb(self: *Self, db: DB) !void {
-		const index_id = self.id;
-
-		// $index_id:i:
-		const term_prefix = [_]u8 {
-			@intCast(u8, (index_id >> 24) & 0xFF),
-			@intCast(u8, (index_id >> 16) & 0xFF),
-			@intCast(u8, (index_id >> 8) & 0xFF),
-			@intCast(u8, index_id & 0xFF),
-			':', 'i', ':'
-		};
+		// $index_id:i:entry_id(4)
+		const key = self.make_db_key_buf('i');
+		// strip out the entry_id part, since we want to iterate through the prefix
+		const term_prefix = key[0..key.len - 4];
 
 		var it = try db.iterate(term_prefix[0..]);
 		defer it.deinit();
@@ -51,6 +45,13 @@ pub const Index = struct {
 			const entry_id : ac.Id = @intCast(u32, k[0])<<24 | @intCast(u32, k[1])<<16 | @intCast(u32, k[2])<<8 | @intCast(u32, k[3]);
 			try self.add(entry_id, entry.value);
 		}
+	}
+
+	// index_id(4):TYPE(1):item_id(4)
+	pub fn make_db_key_buf(self: *Self, data_type: u8) [11]u8 {
+		var buf = [11]u8{0, 0, 0, 0, ':', data_type, ':', 0, 0, 0, 0};
+		ac.encodeId(&buf, self.id);
+		return buf;
 	}
 
 	pub fn find(self: Self, value: []const u8, entries: *[ac.MAX_RESULTS]ac.Id) ![]ac.Id {
@@ -132,7 +133,7 @@ const NgramInfo = struct {
 	ngram_index: ac.NgramIndex,
 };
 
-test "index.add" {
+test "index: add" {
 	{
 		var idx = Index.init(t.allocator, Index.Config{.id = 0});
 		defer idx.deinit();
@@ -161,7 +162,7 @@ test "index.add" {
 	}
 }
 
-test "index.populateFromDb empty" {
+test "index: populateFromDb empty" {
 	t.cleanup();
 	var db = try DB.init("tests/db");
 	defer db.deinit();
@@ -173,8 +174,7 @@ test "index.populateFromDb empty" {
 	try t.expectEqual(@as(usize, 0), idx.lookup.count());
 }
 
-
-test "index.populateFromDb input" {
+test "index: populateFromDb input" {
 	t.cleanup();
 	var db = try DB.init("tests/db");
 	defer db.deinit();
@@ -190,3 +190,18 @@ test "index.populateFromDb input" {
 	try t.expectString("peanut", idx.entries.get(7).?.value);
 	try t.expectEqual(@as(usize, 8), idx.lookup.count());
 }
+
+test "index: make_db_key_buf" {
+	var idx = Index.init(t.allocator, Index.Config{.id = 8291});
+	defer idx.deinit();
+
+	var buf = idx.make_db_key_buf('i');
+	var expected = [_]u8{0, 0, 32, 99, ':', 'i', ':', 0, 0, 0, 0};
+	try t.expectString(&expected, &buf);
+
+	buf = idx.make_db_key_buf('p');
+	expected = [_]u8{0, 0, 32, 99, ':', 'p', ':', 0, 0, 0, 0};
+	try t.expectString(&expected, &buf);
+}
+
+

@@ -1,8 +1,9 @@
 const std = @import("std");
 
 const t = @import("t.zig");
+const web = @import("web/web.zig");
 const ac = @import("autocomplete.zig");
-const zhp = @import("zhp");
+const Config = @import("config.zig").Config;
 
 const Allocator = std.mem.Allocator;
 
@@ -20,17 +21,11 @@ pub fn main() !void {
 	const config = try readConfig(allocator, config_file);
 	defer config.deinit(allocator);
 
-	try ac.setup(allocator, config);
-	defer ac.deinit(allocator);
-
-	var app = zhp.Application.init(allocator, .{ .debug = true });
-
-	defer app.deinit();
-	try app.listen("127.0.0.1", 9000);
-	try app.start();
+	const ctx = try ac.Context.init(allocator, config);
+	try web.start(allocator, ctx, config);
 }
 
-fn readConfig(allocator: Allocator, path: []const u8) !ac.Config {
+fn readConfig(allocator: Allocator, path: []const u8) !Config {
 	const data = std.fs.cwd().readFileAlloc(allocator, path, 4096) catch |err| {
 		if (err == error.FileNotFound) {
 				std.log.warn("'{s}' not found", .{path});
@@ -40,10 +35,8 @@ fn readConfig(allocator: Allocator, path: []const u8) !ac.Config {
 	defer allocator.free(data);
 
 	var stream = std.json.TokenStream.init(data);
-	return try std.json.parse(ac.Config, &stream, .{.allocator = allocator});
+	return try std.json.parse(Config, &stream, .{.allocator = allocator});
 }
-
-
 
 // pub fn quickBenchmark() !void {
 // 	var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -88,25 +81,25 @@ fn readConfig(allocator: Allocator, path: []const u8) !ac.Config {
 // }
 
 test {
-	_ = @import("./index.zig");
-	_ = @import("./search.zig");
+	_ = @import("index.zig");
+	_ = @import("search.zig");
 	std.testing.refAllDecls(@This());
 }
 
-test "readConfig fileNotFound" {
+test "main: config not found" {
 	std.testing.log_level = .err;
 	try t.expectError(error.FileNotFound, readConfig(t.allocator, "invalid.json"));
 	std.testing.log_level = .warn;
 }
 
-
-test "readConfig" {
+test "main: read config" {
 	{
 		const config = try readConfig(t.allocator, "tests/config.json");
 		defer config.deinit(t.allocator);
 
 		try t.expectString("/tmp/autocomplete.db", config.db.?);
-		try t.expectString("127.0.0.1:4000", config.listen.?);
+		try t.expectEqual(@as(u16, 5400), config.port.?);
+		try t.expectString("127.0.0.1", config.address.?);
 	}
 
 	{
@@ -114,6 +107,7 @@ test "readConfig" {
 		defer config.deinit(t.allocator);
 
 		try t.expectEqual(@as(?[]const u8, null), config.db);
-		try t.expectEqual(@as(?[]const u8, null), config.listen);
+		try t.expectEqual(@as(?u16, null), config.port);
+		try t.expectEqual(@as(?[]const u8, null), config.address);
 	}
 }
