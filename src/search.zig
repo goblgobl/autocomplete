@@ -209,6 +209,16 @@ const Top = struct {
 				find_new_low = true;
 			}
 
+		} else if (entry_lookup.len < ac.MAX_RESULTS) {
+			const index = @intCast(u8, entry_lookup.len);
+			entry_lookup.add(entry_id, index);
+
+			scores[index] = new_score;
+			self.entries[index] = entry_id;
+			if (new_score < low_score) {
+				self.low_score = new_score;
+				self.low_index = index;
+			}
 		} else if (new_score > low_score) {
 			var entries = self.entries;
 
@@ -246,17 +256,25 @@ const Top = struct {
 		var entries = self.entries;
 
 		// based on this
-		const scores = self.scores;
+		var scores = self.scores;
 		const entry_count = self.entry_lookup.len;
 
+		// linear insertion sort
+		// We need j to be a usize, to access arrays, but we need it to go to -1
+		// so that we can use [j+1] when setting the final position of the element.
+		// We rely on Zig's guarantee wraparound operators to get over this.
 		var i : usize = 1;
+		const maxUsize = std.math.maxInt(usize);
 		while (i < entry_count) : (i += 1) {
-			var j : usize = i;
-			while (j > 0 and scores[j-1] < scores[j]) : (j -= 1) {
-				const tmp = entries[j];
-				entries[j] = entries[j-1];
-				entries[j-1] = tmp;
+			const score = scores[i];
+			const entry = entries[i];
+			var j: usize = i - 1;
+			while (j != maxUsize and score >= scores[j]) : (j -%= 1) {
+				scores[j + 1] = scores[j];
+				entries[j + 1] = entries[j];
 			}
+			scores[j+%1] = score;
+			entries[j+%1] = entry;
 		}
 
 		return entry_count;
@@ -287,6 +305,14 @@ fn KeyValue(comptime K: type, comptime V: type, comptime max: usize) type {
 				if (k == key) return self.values[i];
 			}
 			return null;
+		}
+
+		fn add(self: *Self, key: K, value: V) void {
+			const len = self.len;
+			std.debug.assert(len < self.keys.len);
+			self.keys[len] = key;
+			self.values[len] = value;
+			self.len = len + 1;
 		}
 
 		fn replaceOrPut(self: *Self, key_to_replace: K, key_to_add: K, value_to_add: V) void {
@@ -358,8 +384,24 @@ test "search: index with multiple entries" {
 
 	found = try search(t.allocator, "ell dragon", &idx, &entries);
 	try t.expectEqual(found, 2);
-	try t.expectEqual(@as(u32, 90), entries[0]);
-	try t.expectEqual(@as(u32, 80), entries[1]);
+	try t.expectEqual(@as(u32, 80), entries[0]);
+	try t.expectEqual(@as(u32, 90	), entries[1]);
+}
+
+test "search: full" {
+	var entries : ac.IdCollector = undefined;
+
+	var idx = Index.init(t.allocator, Index.Config{.id = 0});
+	defer idx.deinit();
+	for (0..ac.MAX_RESULTS+5) |i| {
+		try idx.add(@intCast(ac.Id, i), "cab");
+	}
+
+	var found = try search(t.allocator, "nope", &idx, &entries);
+	try t.expectEqual(@as(usize, 0), found);
+
+	found = try search(t.allocator, "cab", &idx, &entries);
+	try t.expectEqual(found, ac.MAX_RESULTS);
 }
 
 test "search: fuzzyness" {
@@ -371,6 +413,24 @@ test "search: fuzzyness" {
 
 	const found = try search(t.allocator, "mon amour", &idx, &entries);
 	try t.expectEqual(found, 1);
+}
+
+test "search: matching" {
+	var entries : ac.IdCollector = undefined;
+
+	var idx = Index.init(t.allocator, Index.Config{.id = 0});
+	defer idx.deinit();
+	try idx.add(2, "salad");
+	try idx.add(3, "mild salsa");
+	try idx.add(4, "hot salsa");
+	try idx.add(1, "balsamic");
+
+	const found = try search(t.allocator, "salsa", &idx, &entries);
+	try t.expectEqual(found, 4);
+	try t.expectEqual(@as(u32, 4), entries[0]);
+	try t.expectEqual(@as(u32, 3), entries[1]);
+	try t.expectEqual(@as(u32, 1), entries[2]);
+	try t.expectEqual(@as(u32, 2), entries[3]);
 }
 
 // TODO: we need to index trigrams with missing letters
@@ -402,7 +462,6 @@ test "top" {
 		top.update(1, 1);
 		var expected = [_]u32{1};
 		try assertTop(&top, expected[0..]);
-
 
 		// update the same entry, nothing should change
 		top.update(1, 3);
@@ -453,8 +512,7 @@ fn assertTop(top: *Top, expected: []u32) !void {
 	}
 
 	// Once rank is called, top's internal state becomes inconsistent. Specifically
-	// the indexes of scores no longer matches the indexes of entries (because
-	// entries has been sorted).
+	// the entry_lookup no longer has the correct indexes into entries and score.
 
 	// But of testing, we'd like to make incremental changes to top and assert the
 	// scores. So we'll very much hack this and re-set the internal state to be
@@ -467,8 +525,7 @@ fn assertTop(top: *Top, expected: []u32) !void {
 	}
 }
 
-
-test "KeyValue" {
+test "KeyValue: replaceOrPut" {
 	var kv = KeyValue(u32, u8, 5).init();
 	try t.expectEqual(@as(?u8, null), kv.get(32));
 
@@ -488,4 +545,17 @@ test "KeyValue" {
 	try t.expectEqual(@as(u8, 5), kv.get(2323).?);
 	try t.expectEqual(@as(u8, 3), kv.get(888).?);
 	try t.expectEqual(@as(?u8, null), kv.get(32));
+}
+
+test "KeyValue: add" {
+	var kv = KeyValue(u32, u8, 3).init();
+	try t.expectEqual(@as(?u8, null), kv.get(10));
+
+	kv.add(10, 1);
+	kv.add(11, 2);
+	kv.add(12, 3);
+
+	try t.expectEqual(@as(u8, 1), kv.get(10).?);
+	try t.expectEqual(@as(u8, 2), kv.get(11).?);
+	try t.expectEqual(@as(u8, 3), kv.get(12).?);
 }
