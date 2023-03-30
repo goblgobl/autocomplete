@@ -49,7 +49,6 @@ pub const Context = struct {
 	}
 };
 
-
 fn createIndex(allocator: Allocator, db: DB, json: []const u8) !ac.Index {
 	var stream = std.json.TokenStream.init(json);
 	const index_config = try std.json.parse(Index.Config, &stream, .{});

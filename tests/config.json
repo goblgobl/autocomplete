@@ -1,5 +1,5 @@
 {
-	"db": "/tmp/products.db",
+	"db": "/tmp/autocomplete.db",
 	"port": 5400,
 	"address": "127.0.0.1"
 }

@@ -26,3 +26,41 @@ pub fn encodeId(buf: []u8, id: Id) void {
 	buf[2] = @intCast(u8, (id >> 8) & 0xFF);
 	buf[3] = @intCast(u8, id & 0xFF);
 }
+
+// Meant to be used with index.make_db_key_buf
+// make_db_key_buf returns a buffer that contains the index prefix, and has
+// extra bytes to encoded an id at the end.
+pub fn encodePrefixedId(buf: []u8, id: Id) void {
+	std.debug.assert(buf.len == 11);
+	encodeId(buf[7..], id);
+}
+
+test "encodeId" {
+	var buf: [4]u8 = undefined;
+	{
+		encodeId(&buf, 0);
+		var expected = [_]u8{0, 0, 0, 0};
+		try t.expectString(&expected, &buf);
+	}
+
+	{
+		encodeId(&buf, 939292932);
+		var expected = [_]u8{55, 252, 121, 4};
+		try t.expectString(&expected, &buf);
+	}
+}
+
+test "encodePrefixedId" {
+	var buf = [_]u8{0, 1, 2, 3, 4, 5, 6, 1, 1, 1, 1};
+	{
+		encodePrefixedId(&buf, 0);
+		var expected = [_]u8{0, 1, 2, 3, 4, 5, 6, 0, 0, 0, 0};
+		try t.expectString(&expected, &buf);
+	}
+
+	{
+		encodePrefixedId(&buf, 939292932);
+		var expected = [_]u8{0, 1, 2, 3, 4, 5, 6, 55, 252, 121, 4};
+		try t.expectString(&expected, &buf);
+	}
+}

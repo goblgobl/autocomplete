@@ -22,38 +22,52 @@ pub fn cleanup() void {
 }
 
 pub fn buildContext() ContextBuilder {
-	return ContextBuilder.init(allocator) catch unreachable;
+	return ContextBuilder.init() catch unreachable;
 }
 
 pub const ContextBuilder = struct {
-	context: Context,
+	ctx: Context,
 
 	const Self = @This();
 
-	pub fn init(a: std.mem.Allocator) !ContextBuilder{
+	pub fn init() !ContextBuilder{
 		return .{
-			.context = try Context.init(a, .{.db = "tests/db"}),
+			.ctx = try Context.init(allocator, .{.db = "tests/db"}),
 		};
 	}
 
-	pub fn addIndex(self: *Self, idx: Index) *Self {
-		self.context.indexes.put(idx.id, idx) catch unreachable;
-		return self;
+	pub fn deinit(self: *Self) void {
+		self.ctx.deinit();
+	}
+
+	pub fn addIndex(self: *Self, idx: Index) void {
+		self.ctx.indexes.put(idx.id, idx) catch unreachable;
+	}
+
+
+	pub fn buildIndex(self: Self, id: Id) IndexBuilder {
+		return IndexBuilder.init(self.ctx.db, .{.id = id});
 	}
 };
 
-pub fn buildIndex(id: Id) IndexBuilder {
-	return IndexBuilder.init(allocator, .{.id = id});
-}
 
 pub const IndexBuilder = struct {
+	db : DB,
 	index: Index,
 
 	const Self = @This();
 
-	pub fn init(a: std.mem.Allocator, config: Index.Config) IndexBuilder{
+	pub fn init(db: DB, config: Index.Config) IndexBuilder{
 		return .{
-			.index = Index.init(a, config),
+			.db = db,
+			.index = Index.init(allocator, config),
 		};
+	}
+
+	pub fn add(self: *Self, id: ac.Id, term: []const u8, payload: []const u8) void {
+		self.index.add(id, term) catch unreachable;
+		var buf = self.index.make_db_key_buf('p');
+		ac.encodePrefixedId(&buf, id);
+		self.db.put(&buf, payload) catch unreachable;
 	}
 };

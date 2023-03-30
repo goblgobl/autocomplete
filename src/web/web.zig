@@ -32,18 +32,18 @@ pub fn loadIndex(sid: []const u8, ctx: *Context) ?*Index {
 }
 
 test "web: loadIndex null on invalid id" {
-	var ctx = t.buildContext().context;
-	defer ctx.deinit();
-	try t.expectEqual(@as(?*Index, null), loadIndex("3223", &ctx));
-	try t.expectEqual(@as(?*Index, null), loadIndex("invalid", &ctx));
+	var cb = t.buildContext();
+	defer cb.deinit();
+	try t.expectEqual(@as(?*Index, null), loadIndex("3223", &cb.ctx));
+	try t.expectEqual(@as(?*Index, null), loadIndex("invalid", &cb.ctx));
 }
 
 test "web: loadIndex success" {
 	var cb = t.buildContext();
-	var ctx = cb.addIndex(t.buildIndex(391).index).context;
-	defer ctx.deinit();
+	cb.addIndex(cb.buildIndex(391).index);
+	defer cb.deinit();
 
-	try t.expectEqual(@as(Id, 391), loadIndex("391", &ctx).?.id);
+	try t.expectEqual(@as(Id, 391), loadIndex("391", &cb.ctx).?.id);
 }
 
 pub fn invalidIndex(res: *httpz.Response) void {
