@@ -119,15 +119,20 @@ pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdC
 					if (es.word_index == word_index) {
 						const previous_ngram_index = es.ngram_index;
 
-						// It's possible for ngram_index == previous_ngram_index in the same
-
+						// It's possible for ngram_index == previous_ngram_index in the same word
 						if (ngram_index > previous_ngram_index) {
-							// the -1 is because es.ngram_index was the last match, so even in the
-							// best case (where we're matching the next ngram), we'll always be
-							// 1 off
-							const boost = 30 - (ngram_typed - previous_ngram_index - 1) * 5;
-							if (boost > 0) {
-								score += boost;
+							// We "boost" the score based on how close this ngram is to the previous
+							// matched ngram. The max boost is 30. For every 1 position apart
+							// current is from previous, the boost decreases by 5.
+							// Say the previous ngram was at position 3 and the current is at
+							// position 4 (this is very good, it's 2 consecutive ngrams), the
+							// boost will be the full 30 =
+							//    30 - (4 - 3 - 1) * 5  ->  30 - 0 * 5  ->  30
+							// Say the previous ngram was 2 and now we're at 5, the boost is:
+							//    30 - (5 - 2 - 1) * 5  ->  30 - 2 * 5  ->  20
+							const diff = ngram_typed - previous_ngram_index - 1;
+							if (diff < 6) {
+								score += 30 - (diff * 5);
 							}
 						}
 					}

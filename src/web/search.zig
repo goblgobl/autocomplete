@@ -9,7 +9,7 @@ const ht = httpz.testing;
 
 pub fn search(req: *httpz.Request, res: *httpz.Response, ctx: *ac.Context) !void {
 	const query = try req.query();
-	const term = query.get("search") orelse return web.requiredParameter(res, "search");
+	const term = query.get("query") orelse return web.requiredParameter(res, "query");
 	const index = web.loadIndex(req.param("id").?, ctx) orelse return web.invalidIndex(res);
 
 	var ids: ac.IdCollector = undefined;
@@ -50,7 +50,7 @@ pub fn search(req: *httpz.Request, res: *httpz.Response, ctx: *ac.Context) !void
 	try writer.writeAll("}");
 }
 
-test "web.search: missing search" {
+test "web.search: missing query" {
 	var web_test = ht.init(.{});
 	defer web_test.deinit();
 
@@ -63,7 +63,7 @@ test "web.search: invalid index id" {
 	var web_test = ht.init(.{});
 	defer web_test.deinit();
 
-	web_test.url("/?search=abc");
+	web_test.url("/?query=abc");
 	web_test.param("id", "nope");
 	try search(web_test.req, web_test.res, undefined);
 	try web_test.expectStatus(400);
@@ -77,7 +77,7 @@ test "web.search: unknown index id" {
 	var ctx = t.buildContext().context;
 	defer ctx.deinit();
 
-	web_test.url("?search=abc");
+	web_test.url("?query=abc");
 	web_test.param("id", "82281");
 	try search(web_test.req, web_test.res, &ctx);
 	try web_test.expectStatus(400);
