@@ -37,7 +37,7 @@ pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdC
 	var accumulator = AutoHashMap(ac.Id, EntryScore).init(allocator);
 
 	// top scores/entries are mantained here
-	var top = try Top.init(allocator, top_entries);
+	var top = Top.init(top_entries);
 
 	while (input.next()) |result| {
 		const word = result.value;
@@ -174,21 +174,18 @@ const Top = struct {
 	// Once rank() is called the scores and entries indexes are no longer consistent.
 	entries: *ac.IdCollector,
 
-	// entry => index lookup. Following the above example, entra_lookup[32] == 4
-	entry_lookup: AutoHashMap(ac.Id, u8),
+	// entry => index lookup. Following the above example, entry_lookup[32] == 4
+	entry_lookup: KeyValue(ac.Id, u8, ac.MAX_RESULTS),
 
 	const Self = @This();
 
-	fn init(allocator: Allocator, entries: *ac.IdCollector) !Top {
-		var entry_lookup = AutoHashMap(ac.Id, u8).init(allocator);
-		try entry_lookup.ensureTotalCapacity(ac.MAX_RESULTS);
-
+	fn init(entries: *ac.IdCollector) Top {
 		return Top{
 			.low_score = 0,
 			.low_index = 0,
 			.entries = entries,
 			.scores = [_]u16{0} ** ac.MAX_RESULTS,
-			.entry_lookup = entry_lookup,
+			.entry_lookup = KeyValue(ac.Id, u8, ac.MAX_RESULTS).init(),
 		};
 	}
 
@@ -220,8 +217,7 @@ const Top = struct {
 
 			// The first thing we'll do is swap out the old lowest score with this new score
 			scores[low_index] = new_score;
-			_ = entry_lookup.remove(entries[low_index]);
-			entry_lookup.putAssumeCapacity(entry_id, low_index);
+			entry_lookup.replaceOrPut(entries[low_index], entry_id, low_index);
 			entries[low_index] = entry_id;
 
 			// there's no guarantee that this new score is the lowest, we'll have to
@@ -251,7 +247,7 @@ const Top = struct {
 
 		// based on this
 		const scores = self.scores;
-		const entry_count = self.entry_lookup.count();
+		const entry_count = self.entry_lookup.len;
 
 		var i : usize = 1;
 		while (i < entry_count) : (i += 1) {
@@ -267,79 +263,141 @@ const Top = struct {
 	}
 };
 
-test "search" {
-	var found : usize = 0;
-	var entries : [ac.MAX_RESULTS]u32 = undefined;
+// An optimized key=>value lookup for Top. Since we had a hard and small upper
+// limit on the size, and don't need to delete, implementing this as two arrays
+// is much faster.
+fn KeyValue(comptime K: type, comptime V: type, comptime max: usize) type {
+	return struct {
+		len: usize,
+		keys: [max]K,
+		values: [max]V,
 
-	{
-		// empty index
-		var idx = Index.init(t.allocator, Index.Config{.id = 0});
-		defer idx.deinit();
-		found = try search(t.allocator, "anything", &idx, &entries);
-		try t.expectEqual(@as(usize, 0), found);
-	}
+		const Self = @This();
 
-	{
-		// index with 1 entry
-		var idx = Index.init(t.allocator, Index.Config{.id = 0});
-		defer idx.deinit();
-		try idx.add(99, "silver needle");
-
-		found = try search(t.allocator, "nope", &idx, &entries);
-		try t.expectEqual(@as(usize, 0), found);
-
-		const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
-		for (inputs) |input| {
-			found = try search(t.allocator, input, &idx, &entries);
-			try t.expectEqual(found, 1);
-			try t.expectEqual(@as(u32, 99), entries[0]);
+		fn init() Self {
+			return .{
+				.len = 0,
+				.keys = undefined,
+				.values = undefined,
+			};
 		}
-	}
 
-	{
-		// index with multiple entries
-		var idx = Index.init(t.allocator, Index.Config{.id = 0});
-		defer idx.deinit();
-		try idx.add(50, "silver needle");
-		try idx.add(60, "keemun");
-		try idx.add(70, "iron goddess");
-		try idx.add(80, "dragon well");
-		try idx.add(90, "yellow mountain");
+		fn get(self: Self, key: K) ?V {
+			for (self.keys[0..self.len], 0..) |k, i| {
+				if (k == key) return self.values[i];
+			}
+			return null;
+		}
 
-		found = try search(t.allocator, "nope", &idx, &entries);
-		try t.expectEqual(@as(usize, 0), found);
+		fn replaceOrPut(self: *Self, key_to_replace: K, key_to_add: K, value_to_add: V) void {
+			const len = self.len;
+			for (self.keys[0..len], 0..) |k, i| {
+				if (k == key_to_replace) {
+					self.keys[i] = key_to_add;
+					self.values[i] = value_to_add;
+					return;
+				}
+			}
+			std.debug.assert(len < self.keys.len);
+			self.keys[len] = key_to_add;
+			self.values[len] = value_to_add;
+			self.len = len + 1;
+		}
+	};
+}
 
-		found = try search(t.allocator, "kee", &idx, &entries);
+test "search: empty index" {
+	var entries : ac.IdCollector = undefined;
+
+	var idx = Index.init(t.allocator, Index.Config{.id = 0});
+	defer idx.deinit();
+	const found = try search(t.allocator, "anything", &idx, &entries);
+	try t.expectEqual(@as(usize, 0), found);
+}
+
+test "search: index with 1 entry" {
+	var entries : ac.IdCollector = undefined;
+
+	var idx = Index.init(t.allocator, Index.Config{.id = 0});
+	defer idx.deinit();
+	try idx.add(99, "silver needle");
+
+	var found = try search(t.allocator, "nope", &idx, &entries);
+	try t.expectEqual(@as(usize, 0), found);
+
+	const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
+	for (inputs) |input| {
+		found = try search(t.allocator, input, &idx, &entries);
 		try t.expectEqual(found, 1);
-		try t.expectEqual(@as(u32, 60), entries[0]);
-
-		found = try search(t.allocator, "yellow", &idx, &entries);
-		try t.expectEqual(found, 2);
-		try t.expectEqual(@as(u32, 90), entries[0]);
-		try t.expectEqual(@as(u32, 80), entries[1]);
-
-		found = try search(t.allocator, "ell dragon", &idx, &entries);
-		try t.expectEqual(found, 2);
-		try t.expectEqual(@as(u32, 90), entries[0]);
-		try t.expectEqual(@as(u32, 80), entries[1]);
-	}
-
-	{
-		var idx = Index.init(t.allocator, Index.Config{.id = 0});
-		defer idx.deinit();
-		try idx.add(50, "among famous books");
-
-		found = try search(t.allocator, "mon amour", &idx, &entries);
-		try t.expectEqual(found, 1);
+		try t.expectEqual(@as(u32, 99), entries[0]);
 	}
 }
 
+test "search: index with multiple entries" {
+	var entries : ac.IdCollector = undefined;
+
+	var idx = Index.init(t.allocator, Index.Config{.id = 0});
+	defer idx.deinit();
+	try idx.add(50, "silver needle");
+	try idx.add(60, "keemun");
+	try idx.add(70, "iron goddess");
+	try idx.add(80, "dragon well");
+	try idx.add(90, "yellow mountain");
+
+	var found = try search(t.allocator, "nope", &idx, &entries);
+	try t.expectEqual(@as(usize, 0), found);
+
+	found = try search(t.allocator, "kee", &idx, &entries);
+	try t.expectEqual(found, 1);
+	try t.expectEqual(@as(u32, 60), entries[0]);
+
+	found = try search(t.allocator, "yellow", &idx, &entries);
+	try t.expectEqual(found, 2);
+	try t.expectEqual(@as(u32, 90), entries[0]);
+	try t.expectEqual(@as(u32, 80), entries[1]);
+
+	found = try search(t.allocator, "ell dragon", &idx, &entries);
+	try t.expectEqual(found, 2);
+	try t.expectEqual(@as(u32, 90), entries[0]);
+	try t.expectEqual(@as(u32, 80), entries[1]);
+}
+
+test "search: fuzzyness" {
+	var entries : ac.IdCollector = undefined;
+
+	var idx = Index.init(t.allocator, Index.Config{.id = 0});
+	defer idx.deinit();
+	try idx.add(50, "among famous books");
+
+	const found = try search(t.allocator, "mon amour", &idx, &entries);
+	try t.expectEqual(found, 1);
+}
+
+// TODO: we need to index trigrams with missing letters
+// So we have our normal trigram for Rooibos:
+//   roo, ooi, oib, ibo, bos
+// and we'd add:
+//   roi, oib, obo, ios, ibs
+// test "search: fuzzyness ranking" {
+// 	var found : usize = 0;
+// 	var entries : ac.IdCollector = undefined;
+
+// 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
+// 	defer idx.deinit();
+// 	try idx.add(1, "Ciya Rooster 4.75\" Porcelain Pot");
+// 	try idx.add(2, "Nature's Nutrition Organic Rooibos Tea");
+
+// 	found = try search(t.allocator, "roobois", &idx, &entries);
+// 	try t.expectEqual(found, 2);
+// 	try t.expectEqual(@as(u32, 2), entries[0]);
+// 	try t.expectEqual(@as(u32, 1), entries[1]);
+// }
+
 test "top" {
-	var entries : [ac.MAX_RESULTS]u32 = undefined;
+	var entries : ac.IdCollector = undefined;
 	{
 		// single result
-		var top = try Top.init(t.allocator, &entries);
-		defer top.entry_lookup.deinit();
+		var top = Top.init(&entries);
 
 		top.update(1, 1);
 		var expected = [_]u32{1};
@@ -353,8 +411,7 @@ test "top" {
 
 	{
 		// two resutls (baby steps!)
-		var top = try Top.init(t.allocator, &entries);
-		defer top.entry_lookup.deinit();
+		var top = Top.init(&entries);
 
 		top.update(1, 1);
 		top.update(2, 2);
@@ -368,8 +425,7 @@ test "top" {
 
 	{
 		// many results
-		var top = try Top.init(t.allocator, &entries);
-		defer top.entry_lookup.deinit();
+		var top = Top.init(&entries);
 
 		for (1..100) |i| {
 			var b : u16 = @intCast(u16, i);
@@ -405,8 +461,31 @@ fn assertTop(top: *Top, expected: []u32) !void {
 	// correct for future calls.
 	// We're able to do this because the entry_lookup keeps the entry -> index
 	// which we can use to restore the entries array.
-	var it = top.entry_lookup.iterator();
-	while (it.next()) |entry| {
-		top.entries[entry.value_ptr.*] = entry.key_ptr.*;
+	const el = top.entry_lookup;
+	for (el.keys[0..el.len], el.values[0..el.len]) |entry_id, index_id| {
+		top.entries[index_id] = entry_id;
 	}
+}
+
+
+test "KeyValue" {
+	var kv = KeyValue(u32, u8, 5).init();
+	try t.expectEqual(@as(?u8, null), kv.get(32));
+
+	kv.replaceOrPut(0, 32, 10);
+	try t.expectEqual(@as(u8, 10), kv.get(32).?);
+
+	kv.replaceOrPut(0, 9932, 2);
+	try t.expectEqual(@as(u8, 10), kv.get(32).?);
+	try t.expectEqual(@as(u8, 2), kv.get(9932).?);
+
+	kv.replaceOrPut(9932, 888, 3);
+	try t.expectEqual(@as(u8, 10), kv.get(32).?);
+	try t.expectEqual(@as(u8, 3), kv.get(888).?);
+	try t.expectEqual(@as(?u8, null), kv.get(9932));
+
+	kv.replaceOrPut(32, 2323, 5);
+	try t.expectEqual(@as(u8, 5), kv.get(2323).?);
+	try t.expectEqual(@as(u8, 3), kv.get(888).?);
+	try t.expectEqual(@as(?u8, null), kv.get(32));
 }

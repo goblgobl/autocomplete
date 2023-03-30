@@ -43,7 +43,6 @@ pub const Input = struct {
 		};
 	}
 
-
 	pub fn next(self: *Self) ?Word {
 		@setRuntimeSafety(builtin.is_test);
 
