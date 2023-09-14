@@ -198,7 +198,7 @@ const Top = struct {
 			const existing_score = scores[score_index];
 			scores[score_index] = new_score;
 
-			if ( existing_score == low_score) {
+			if (existing_score == low_score) {
 				// if this entry had our lowest score, it might no longer, so we'll have
 				// to find the new lowest score.
 				low_score = new_score;
@@ -283,8 +283,8 @@ const Top = struct {
 fn KeyValue(comptime K: type, comptime V: type) type {
 	return struct {
 		len: usize,
-		keys: [ac.MAX_RESULTS]K,
 		values: [ac.MAX_RESULTS]V,
+		keys: @Vector(ac.MAX_RESULTS, K),
 
 		const Self = @This();
 
@@ -297,40 +297,35 @@ fn KeyValue(comptime K: type, comptime V: type) type {
 		}
 
 		fn get(self: Self, key: K) ?V {
-			@setRuntimeSafety(false);
-			std.debug.assert(ac.MAX_RESULTS == 10);
-			const keys = &self.keys;
-			if (keys[0] == key) return self.values[0];
-			if (keys[1] == key) return self.values[1];
-			if (keys[2] == key) return self.values[2];
-			if (keys[3] == key) return self.values[3];
-			if (keys[4] == key) return self.values[4];
-			if (keys[5] == key) return self.values[5];
-			if (keys[6] == key) return self.values[6];
-			if (keys[7] == key) return self.values[7];
-			if (keys[8] == key) return self.values[8];
-			if (keys[9] == key) return self.values[9];
+			if (std.simd.firstIndexOfValue(self.keys, key)) |i| {
+				return self.values[i];
+			}
 			return null;
 		}
 
 		fn add(self: *Self, key: K, value: V) void {
 			const len = self.len;
-			std.debug.assert(len < self.keys.len);
+			// std.debug.assert(len < self.keys.len);
 			self.keys[len] = key;
 			self.values[len] = value;
 			self.len = len + 1;
 		}
 
 		fn replaceOrPut(self: *Self, key_to_replace: K, key_to_add: K, value_to_add: V) void {
-			const len = self.len;
-			for (self.keys[0..len], 0..) |k, i| {
-				if (k == key_to_replace) {
-					self.keys[i] = key_to_add;
-					self.values[i] = value_to_add;
-					return;
-				}
+			if (std.simd.firstIndexOfValue(self.keys, key_to_replace)) |i| {
+				self.keys[i] = key_to_add;
+				self.values[i] = value_to_add;
+				return;
 			}
-			std.debug.assert(len < self.keys.len);
+			const len = self.len;
+			// for (self.keys[0..len], 0..) |k, i| {
+			// 	if (k == key_to_replace) {
+			// 		self.keys[i] = key_to_add;
+			// 		self.values[i] = value_to_add;
+			// 		return;
+			// 	}
+			// }
+			// std.debug.assert(len < self.keys.len);
 			self.keys[len] = key_to_add;
 			self.values[len] = value_to_add;
 			self.len = len + 1;
@@ -338,21 +333,40 @@ fn KeyValue(comptime K: type, comptime V: type) type {
 	};
 }
 
+// We accumulate results here. The "result" being an id => score mapping. We
+// have very basic requirements, which allows us to build something more
+// specialized than std.AutoHashMap. We only upsert and we don't iterate.
+// We use a bitset to track which value is set or not.
+// This might seem unecessary since we don't handle deletes, but it makes our
+// Accumulator reusable (via a pool). An accumulator never grows or shrunk,
+// collisions are handled by chaining another accumulator (which comes from the
+// pool). We don't even attempt to re-hash, if a value hashes to index 3929 then
+// it _will_ be found at ids[3939] and scores[3939], just maybe of a nested
+// accumulator. Worst case, accumulating N values means we'll have a nesting
+// of N accumulators in what would be the world's most inneficient linked list.
 pub const Accumulator = struct {
 	const SIZE = 32768;
 	const SIZE_MASK = SIZE - 1;
 	const STATE_BITS = SIZE / 64;
-	const GROW_SIZE : u16 = @intFromFloat(SIZE * 0.7);
 
-	size: usize = 0,
-	ids: [SIZE]ac.Id = std.mem.zeroes([SIZE]ac.Id),
-	states: [STATE_BITS]u64 = std.mem.zeroes([STATE_BITS]u64),
-	scores: [SIZE]EntryScore = undefined,
 	next: ?*Accumulator = null,
+
+	// only meaningful if the corresponding state flag is 1
+	// this allows us to re-use an accumulator without having to clear entries
+	// (we just need to clear states, with is 64 time smaller)
+	entries: [SIZE]Entry = undefined,
+
+	// bitset when set to 1, entries is valid
+	states: [STATE_BITS]u64 = std.mem.zeroes([STATE_BITS]u64),
 
 	const GetOrPutResult = struct {
 		found_existing: bool,
 		value_ptr: *EntryScore,
+	};
+
+	const Entry = struct {
+		id: ac.Id,
+		score: EntryScore,
 	};
 
 	const ProbeResult = struct {
@@ -367,7 +381,6 @@ pub const Accumulator = struct {
 	}
 
 	fn reset(self:* Accumulator) void {
-		self.size = 0;
 		self.next = null;
 		for (&self.states) |*i| {
 			i.* = 0;
@@ -375,79 +388,43 @@ pub const Accumulator = struct {
 	}
 
 	fn getOrPut(self: *Accumulator, id: ac.Id, pool: *AccumulatorPool) !GetOrPutResult {
-		var pr = self.find(id);
+		const h = hash(id);
+		const idx: u16 = @intCast(h & SIZE_MASK);
+		const bucket = idx / 64;
+		const slot = @as(u64, 1) << @intCast(idx & 63);
 
-		if (pr.found) {
-			// we found the entry, return it
-			return .{
-				.found_existing = true,
-				.value_ptr = &self.scores[pr.idx],
-			};
+		var acc = self;
+		while (true) {
+			if (acc.states[bucket] & slot == 0) {
+				return .{
+					.found_existing = false,
+					.value_ptr = &acc.entries[idx].score,
+				};
+			}
+
+			var entry = &acc.entries[idx];
+			if (entry.id == id) {
+				return .{
+					.found_existing = true,
+					.value_ptr = &entry.score,
+				};
+			}
+			if (acc.next) |n| {
+				acc = n;
+			} else {
+				break;
+			}
 		}
 
-		if (self.next) |next| {
-			// we didn't find the entry, and we have a chained accumulator,
-			// delegate to it
-			return next.getOrPut(id, pool);
-		}
+		const new = try pool.acquire();
+		acc.next = new;
+		new.entries[idx] = .{.id = id, .score = undefined};
+		new.states[bucket] |= slot;
 
-		if (try self.conditionallyGrow(pool)) |next| {
-			// we didn't find the entry, but we just added a chained accumulator,
-			// delegate to it.
-			return next.getOrPut(id, pool);
-		}
-
-		// We didn't find the entry, we have no chained accumulator, put the entry
-		// in the (non-ideal) spot that we did find
-		self.size += 1;
-		const idx = pr.idx;
-		self.ids[idx] = id;
-		self.states[pr.bucket] |= pr.slot;
 		return .{
 			.found_existing = false,
-			.value_ptr = &self.scores[idx],
+			.value_ptr = &new.entries[idx].score,
 		};
-	}
-
-	fn find(self: *Accumulator, id: ac.Id) ProbeResult {
-		const ids = &self.ids;
-		const states = &self.states;
-
-		var h = hash(id);
-		while (true) : (h += 1) {
-			const idx: u16 = @intCast(h & SIZE_MASK);
-			const bucket = idx / 64;
-			const slot = @as(u64, 1) << @intCast(idx & 63);
-
-			if (states[bucket] & slot == 0) {
-				return .{
-					.idx = idx,
-					.slot = slot,
-					.found = false,
-					.bucket = bucket,
-				};
-			}
-
-			if (ids[idx] == id) {
-				return .{
-					.idx = idx,
-					.slot = slot,
-					.found = true,
-					.bucket = bucket,
-				};
-			}
-		}
-
-		unreachable;
-	}
-
-	fn conditionallyGrow(self: *Accumulator, pool: *AccumulatorPool) !?*Accumulator{
-		if (self.size < GROW_SIZE) {
-			return null;
-		}
-		const acc = try pool.acquire();
-		self.next = acc;
-		return acc;
 	}
 };
 
@@ -460,10 +437,6 @@ fn hash(x: ac.Id) u64 {
 	h ^= h >> 16;
 	return h;
 }
-
-// fn hash(x: ac.Id ) u64 {
-// 	return std.hash.Wyhash.hash(0, std.mem.asBytes(&x));
-// }
 
 pub const AccumulatorPool = struct {
 	available: usize,

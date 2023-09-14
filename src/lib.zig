@@ -12,7 +12,7 @@ pub const WordIndex = u3;
 pub const NgramIndex = u5;
 pub const IdCollector = [MAX_RESULTS]Id;
 
-pub const MAX_RESULTS = 10;
+pub const MAX_RESULTS = 16;
 pub const MAX_WORDS = (1 << @bitSizeOf(WordIndex)) - 1;
 pub const MAX_WORD_LENGTH = (1 << @bitSizeOf(NgramIndex)) - 1;
 

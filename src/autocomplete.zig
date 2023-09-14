@@ -6,3 +6,5 @@ pub const search = @import("search.zig").search;
 
 pub const Id = ac.Id;
 pub const IdCollector = ac.IdCollector;
+
+pub const MAX_RESULTS = ac.MAX_RESULTS;

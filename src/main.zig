@@ -38,13 +38,13 @@ pub fn quickBenchmark() !void {
 	var timer = try std.time.Timer.start();
 
 	std.debug.print("LOADED\n", .{});
-	const LOOPS = 1000;
+	const LOOPS = 10000;
 	timer.reset();
 
 	for (0..LOOPS) |_| {
 		const found = try ac.search(allocator, "revolution", &index, &ap, &ids);
-		if (found != 10) {
-			std.debug.print("didn't find 10 items\n", .{});
+		if (found != ac.MAX_RESULTS) {
+			std.debug.print("didn't find ac.MAX_RESULTS items\n", .{});
 		}
 	}
 
