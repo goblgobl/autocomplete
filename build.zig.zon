@@ -2,9 +2,5 @@
     .name = "autocomplete",
     .version = "0.0.0",
     .dependencies = .{
-        .zhp = .{
-            .url = "https://github.com/karlseguin/zhp/archive/087b53521514cdb747222edffa0a233a56532ca4.tar.gz",
-            .hash = "12201a422f06cf765ea9172e9b2eef663f867fefa0097c9e51f60e3b65d0e97947ed"
-        },
     },
 }

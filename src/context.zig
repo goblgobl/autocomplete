@@ -1,20 +1,17 @@
 const std = @import("std");
-const t = @import("t.zig");
-const ac = @import("autocomplete.zig");
-const DB = @import("db.zig").DB;
-const Config = @import("config.zig").Config;
-const ConcurrentMap = @import("concurrent_map.zig").ConcurrentMap;
+const ac = @import("lib.zig");
 
 const Allocator = std.mem.Allocator;
 
+const DB = ac.DB;
 const Id = ac.Id;
 const Index = ac.Index;
+const Config = ac.Config;
+const ConcurrentMap = ac.ConcurrentMap
 
 pub const Context = struct {
 	db: DB,
 	indexes: ConcurrentMap(Id, Index),
-
-	const Self = @This();
 
 	pub fn init(allocator: Allocator, config: Config) !Context {
 		const db = try DB.init(config.db orelse "db");
@@ -33,7 +30,7 @@ pub const Context = struct {
 		};
 	}
 
-	pub fn deinit(self: *Self) void {
+	pub fn deinit(self: Context) void {
 		self.db.deinit();
 
 		// don't need to be thread safe anymore, so use the underlying map directly
@@ -77,6 +74,6 @@ test "setup: loads DBs" {
 	defer ctx.deinit();
 
 	// lol, this is stupid
-	try t.expectEqual(@as(Id, 5), ctx.getIndex(33).?.lookup.get("lve").?.items[0].entry_id);
-	try t.expectEqual(@as(Id, 1022), ctx.getIndex(996).?.lookup.get("eem").?.items[0].entry_id);
+	try t.expectEqual(5, ctx.getIndex(33).?.lookup.get("lve").?.items[0].entry_id);
+	try t.expectEqual(1022, ctx.getIndex(996).?.lookup.get("eem").?.items[0].entry_id);
 }

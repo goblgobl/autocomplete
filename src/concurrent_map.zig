@@ -1,5 +1,5 @@
 const std = @import("std");
-const t = @import("t.zig");
+const ac = @import("lib.zig");
 
 const RwLock = std.Thread.RwLock;
 const Allocator = std.mem.Allocator;
@@ -53,24 +53,25 @@ pub fn ConcurrentMap(comptime K: type, comptime V: type) type {
 	};
 }
 
+const t = ac.testing;
 test "concurrent_map: get and put" {
 	var m = ConcurrentMap(i32, bool).init(t.allocator);
 	defer m.deinit();
-	try t.expectEqual(@as(?bool, null), m.get(32));
-	try t.expectEqual(@as(?bool, null), m.get(99));
+	try t.expectEqual(null, m.get(32));
+	try t.expectEqual(null, m.get(99));
 	try t.expectEqual(false, m.remove(32));
 	try t.expectEqual(false, m.remove(99));
 
 	try m.put(32, true);
-	try t.expectEqual(@as(?bool, true), m.get(32));
-	try t.expectEqual(@as(?bool, null), m.get(99));
+	try t.expectEqual(true, m.get(32));
+	try t.expectEqual(null, m.get(99));
 
 	try m.put(32, false);
-	try t.expectEqual(@as(?bool, false), m.get(32));
-	try t.expectEqual(@as(?bool, null), m.get(99));
+	try t.expectEqual(false, m.get(32));
+	try t.expectEqual(null, m.get(99));
 
 	try t.expectEqual(true, m.remove(32));
 	try t.expectEqual(false, m.remove(99));
-	try t.expectEqual(@as(?bool, null), m.get(32));
-	try t.expectEqual(@as(?bool, null), m.get(99));
+	try t.expectEqual(null, m.get(32));
+	try t.expectEqual(null, m.get(99));
 }

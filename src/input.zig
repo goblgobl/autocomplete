@@ -1,8 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const t = @import("t.zig");
-const ac = @import("autocomplete.zig");
+const ac = @import("lib.zig");
 
 const ascii = std.ascii;
 const Allocator = std.mem.Allocator;
@@ -17,7 +16,7 @@ pub const Input = struct {
 
 	// The normalized input. We own this, but if this is being called when adding
 	// an item to the Index, the Index will take over this.
-	normalized: []u8,
+	normalized_buffer: []u8,
 
 	// We normalize one character at a time, and this in where in normalized that
 	// we're at. The final normalized.len will always be <= input.len.
@@ -39,7 +38,7 @@ pub const Input = struct {
 			.input = input,
 			.word_count = 0,
 			.normalized_position = 0,
-			.normalized = try allocator.alloc(u8, input.len),
+			.normalized_buffer = try allocator.alloc(u8, input.len),
 		};
 	}
 
@@ -58,14 +57,13 @@ pub const Input = struct {
 			return null;
 		}
 
-		var normalized = self.normalized;
-		var normalized_position = self.normalized_position;
-		var word_start = normalized_position;
-
+		var norm = self.normalized_buffer;
+		var norm_position = self.normalized_position;
+		var word_start = norm_position;
 
 		if (word_count > 0) {
-			normalized[normalized_position] = ' ';
-			normalized_position += 1;
+			norm[norm_position] = ' ';
+			norm_position += 1;
 			word_start += 1;
 		}
 
@@ -73,8 +71,8 @@ pub const Input = struct {
 		for (input) |b| {
 			i += 1;
 			if (ascii.isAlphanumeric(b)) {
-				normalized[normalized_position] = ascii.toLower(b);
-				normalized_position += 1;
+				norm[norm_position] = ascii.toLower(b);
+				norm_position += 1;
 				continue;
 			}
 
@@ -85,48 +83,49 @@ pub const Input = struct {
 
 		// when next() is called again, we'll start scanning input from where we left off
 		self.input = input[i..];
-		self.normalized_position = normalized_position;
+		self.normalized_position = norm_position;
 
 
-		if (normalized_position - word_start < 3) {
+		if (norm_position - word_start < 3) {
 			// our "word" is only 1 or 2 characters, skip to the next word
 			// TODO: remove this recursion.
 			return self.next();
 		}
 
-		var word = normalized[word_start..normalized_position];
+		var word = norm[word_start..norm_position];
 		if (word.len > ac.MAX_WORD_LENGTH) {
 			word = word[0..ac.MAX_WORD_LENGTH];
 		}
 
 		self.word_count = word_count + 1;
-		return Word{
+		return .{
 			.value = word,
 			.index = word_count,
 		};
 	}
 
-	pub fn getNormalized(self: Self) []const u8 {
-		return self.normalized[0..self.normalized_position];
+	pub fn normalized(self: Self) []const u8 {
+		return self.normalized_buffer[0..self.normalized_position];
 	}
 };
 
+const t = ac.testing;
 test "input: parse single word" {
 	{
 		// 2 letter word
 		var input = try testCollectInput("hi");
 		defer input.deinit();
-		try t.expectEqual(@as(u8, 0), input.word_count);
-		try t.expectEqual(@as(usize, 0), input.lookup.count());
+		try t.expectEqual(0, input.word_count);
+		try t.expectEqual(0, input.lookup.count());
 	}
 
 	{
 		// 3 letter word
 		var input = try testCollectInput("Tea");
 		defer input.deinit();
-		try t.expectString("tea", input.value,);
-		try t.expectEqual(@as(u8, 1),input.word_count);
-		try t.expectEqual(@as(usize, 1),input.lookup.count());
+		try t.expectString("tea", input.normalized);
+		try t.expectEqual(1,input.word_count);
+		try t.expectEqual(1,input.lookup.count());
 		try input.expectWord("tea", 0);
 	}
 
@@ -137,9 +136,9 @@ test "input: parse single word" {
 	for (values) |value| {
 		var input = try testCollectInput(value);
 		defer input.deinit();
-		try t.expectString(input.value, "keemun");
-		try t.expectEqual(@as(u8, 1),input.word_count);
-		try t.expectEqual(@as(usize, 1),input.lookup.count());
+		try t.expectString("keemun", input.normalized);
+		try t.expectEqual(1, input.word_count);
+		try t.expectEqual(1, input.lookup.count());
 		try input.expectWord("keemun", 0);
 	}
 }
@@ -158,9 +157,9 @@ test "input: parse two word" {
 	for (values) |value| {
 		var input = try testCollectInput(value);
 		defer input.deinit();
-		try t.expectString(input.value, "black bear");
-		try t.expectEqual(@as(u8, 2),input.word_count);
-		try t.expectEqual(@as(usize, 2),input.lookup.count());
+		try t.expectString("black bear", input.normalized);
+		try t.expectEqual(2, input.word_count);
+		try t.expectEqual(2, input.lookup.count());
 		try input.expectWord("black", 0);
 		try input.expectWord("bear", 1);
 	}
@@ -169,9 +168,9 @@ test "input: parse two word" {
 			// ignore short words
 			var input = try testCollectInput(" Black  at");
 			defer input.deinit();
-			try t.expectString(input.value, "black at");
-			try t.expectEqual(@as(u8, 1),input.word_count);
-			try t.expectEqual(@as(usize, 1),input.lookup.count());
+			try t.expectString("black at", input.normalized);
+			try t.expectEqual(1, input.word_count);
+			try t.expectEqual(1, input.lookup.count());
 			try input.expectWord("black", 0);
 	}
 
@@ -179,9 +178,9 @@ test "input: parse two word" {
 		// ignore short words
 		var input = try testCollectInput(" Black a  cat  ");
 		defer input.deinit();
-		try t.expectString(input.value, "black a cat");
-		try t.expectEqual(@as(u8, 2),input.word_count);
-		try t.expectEqual(@as(usize, 2),input.lookup.count());
+		try t.expectString("black a cat", input.normalized);
+		try t.expectEqual(2, input.word_count);
+		try t.expectEqual(2, input.lookup.count());
 		try input.expectWord("black", 0);
 		try input.expectWord("cat", 1);
 	}
@@ -190,20 +189,21 @@ test "input: parse two word" {
 test "input: stops at 8 words" {
 		var input = try testCollectInput("wrd1 wrd2 wrd3 wrd4 wrd5 wrd6 wrd7 wrd8 wrd9");
 		defer input.deinit();
-		try t.expectEqual(@as(u8, 7), input.word_count);
+		try t.expectEqual(7, input.word_count);
 }
 
 test "input: stops at 31 character words" {
 		var input = try testCollectInput("0123456789012345678901234567ABC 0123456789012345678901234567VWXYZ");
 		defer input.deinit();
-		try t.expectEqual(@as(u8, 2), input.word_count);
+		try t.expectEqual(2, input.word_count);
 		try input.expectWord("0123456789012345678901234567abc", 0);
 		try input.expectWord("0123456789012345678901234567vwx", 1);
 }
 
 const ParseTestResult = struct {
-	value: []const u8,
 	word_count: u8,
+	normalized: []const u8,
+	normalized_buffer: []const u8,
 	lookup: StringHashMap(ac.WordIndex),
 
 	const Self = @This();
@@ -214,7 +214,7 @@ const ParseTestResult = struct {
 	}
 
 	fn deinit(self: *Self) void {
-		t.allocator.free(self.value);
+		t.allocator.free(self.normalized_buffer);
 		self.lookup.deinit();
 		self.* = undefined;
 	}
@@ -228,7 +228,21 @@ fn testCollectInput(value: []const u8) !ParseTestResult {
 	}
 	return ParseTestResult{
 		.lookup = lookup,
-		.value = input.getNormalized(),
 		.word_count = input.word_count,
+		.normalized = input.normalized(),
+		.normalized_buffer = input.normalized_buffer,
 	};
 }
+
+
+// if word.len < 4, 0 entries
+// if word.len == 4, 2 entries
+// else (word.len - 4)  * 2 entries
+// fuzzyTrigram(word);
+
+// fn fuzzyTrigram(word: []const u8) void {
+// 	for (0..word.len-3) |i| {
+// 		std.debug.print(" {s}{s}\n", .{word[i..i+1], word[i+2..i+4]});
+// 		std.debug.print(" {s}{s}\n", .{word[i..i+2], word[i+3..i+4]});
+// 	}
+// }

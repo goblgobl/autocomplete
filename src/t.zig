@@ -11,9 +11,17 @@ const Context = ac.Context;
 pub const expect = std.testing.expect;
 pub const allocator = std.testing.allocator;
 
-pub const expectEqual = std.testing.expectEqual;
+// std.testing.expectEqual won't coerce expected to actual, which is a problem
+// when expected is frequently a comptime.
+// https://github.com/ziglang/zig/issues/4437
+pub fn expectEqual(expected: anytype, actual: anytype) !void {
+	try std.testing.expectEqual(@as(@TypeOf(actual), expected), actual);
+}
+
 pub const expectError = std.testing.expectError;
+pub const expectSlice = std.testing.expectEqualSlices;
 pub const expectString = std.testing.expectEqualStrings;
+
 
 pub fn cleanup() void {
 	const cwd = std.fs.cwd();
@@ -28,24 +36,22 @@ pub fn buildContext() ContextBuilder {
 pub const ContextBuilder = struct {
 	ctx: Context,
 
-	const Self = @This();
-
 	pub fn init() !ContextBuilder{
 		return .{
 			.ctx = try Context.init(allocator, .{.db = "tests/db"}),
 		};
 	}
 
-	pub fn deinit(self: *Self) void {
+	pub fn deinit(self: ContextBuilder) void {
 		self.ctx.deinit();
 	}
 
-	pub fn addIndex(self: *Self, idx: Index) void {
+	pub fn addIndex(self: *ContextBuilder, idx: Index) void {
 		self.ctx.indexes.put(idx.id, idx) catch unreachable;
 	}
 
 
-	pub fn buildIndex(self: Self, id: Id) IndexBuilder {
+	pub fn buildIndex(self: ContextBuilder, id: Id) IndexBuilder {
 		return IndexBuilder.init(self.ctx.db, .{.id = id});
 	}
 };
@@ -55,8 +61,6 @@ pub const IndexBuilder = struct {
 	db : DB,
 	index: Index,
 
-	const Self = @This();
-
 	pub fn init(db: DB, config: Index.Config) IndexBuilder{
 		return .{
 			.db = db,
@@ -64,7 +68,7 @@ pub const IndexBuilder = struct {
 		};
 	}
 
-	pub fn add(self: *Self, id: ac.Id, term: []const u8, payload: []const u8) void {
+	pub fn add(self: *IndexBuilder, id: ac.Id, term: []const u8, payload: []const u8) void {
 		self.index.add(id, term) catch unreachable;
 		var buf = self.index.make_db_key_buf('p');
 		ac.encodePrefixedId(&buf, id);

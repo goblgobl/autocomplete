@@ -35,6 +35,7 @@ pub fn search(req: *httpz.Request, res: *httpz.Response, ctx: *ac.Context) !void
 	defer tx.abort(); // a bit faster to abort a read tx
 
 	var added: usize = 0;
+
 	for (ids[0..found]) |id| {
 		ac.encodePrefixedId(key_ref, id);
 		if (try tx.get(key_ref)) |payload| {

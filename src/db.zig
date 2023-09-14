@@ -1,12 +1,9 @@
 const std = @import("std");
 const c = @cImport(@cInclude("lmdb.h"));
-const t = @import("t.zig");
 
 pub const DB = struct {
 	dbi: c_uint,
 	env: ?*c.MDB_env,
-
-	const Self = @This();
 
 	const Tx = struct {
 		dbi: c_uint,
@@ -95,7 +92,7 @@ pub const DB = struct {
 		value: []const u8,
 	};
 
-	pub fn init(path: []const u8) !Self {
+	pub fn init(path: []const u8) !DB {
 		var env: ?*c.MDB_env = null;
 
 		var result = c.mdb_env_create(&env);
@@ -125,11 +122,11 @@ pub const DB = struct {
 		return db;
 	}
 
-	pub fn deinit(self: Self) void {
+	pub fn deinit(self: DB) void {
 		c.mdb_env_close(self.env);
 	}
 
-	pub fn writeTx(self: Self) !Tx{
+	pub fn writeTx(self: DB) !Tx{
 		var txn: ?*c.MDB_txn = null;
 
 		var result = c.mdb_txn_begin(self.env, null, 0, &txn);
@@ -140,7 +137,7 @@ pub const DB = struct {
 		return Tx{.txn = txn, .dbi = self.dbi};
 	}
 
-	pub fn readTx(self: Self) !Tx{
+	pub fn readTx(self: DB) !Tx{
 		var txn: ?*c.MDB_txn = null;
 
 		var result = c.mdb_txn_begin(self.env, null, c.MDB_RDONLY, &txn);
@@ -151,7 +148,7 @@ pub const DB = struct {
 		return Tx{.txn = txn, .dbi = self.dbi};
 	}
 
-	pub fn iterate(self: Self, prefix: []const u8) !Iterator {
+	pub fn iterate(self: DB, prefix: []const u8) !Iterator {
 		const tx = try self.readTx();
 		errdefer tx.abort();
 
@@ -161,7 +158,7 @@ pub const DB = struct {
 			return errorFromCode(result);
 		}
 
-		return Iterator{
+		return .{
 			.tx = tx,
 			.started = false,
 			.prefix = prefix,
@@ -169,7 +166,7 @@ pub const DB = struct {
 		};
 	}
 
-	pub fn put(self: Self, key: []const u8, value: []const u8) !void {
+	pub fn put(self: DB, key: []const u8, value: []const u8) !void {
 		const tx = try self.writeTx();
 		errdefer tx.abort();
 		try tx.put(key, value);
@@ -177,16 +174,15 @@ pub const DB = struct {
 	}
 };
 
-
 fn toMDBVal(in: []const u8) c.MDB_val {
 	return c.MDB_val{
 		.mv_size = in.len,
-		.mv_data = @ptrCast(?*anyopaque, @constCast(in.ptr)),
+		.mv_data = @ptrCast(@constCast(in.ptr)),
 	};
 }
 
 fn fromMDBVal(val: c.MDB_val) []const u8 {
-	return @ptrCast([*]const u8, val.mv_data)[0..val.mv_size];
+	return @as([*]const u8, @ptrCast(val.mv_data))[0..val.mv_size];
 }
 
 fn nullVal() c.MDB_val {
@@ -217,19 +213,20 @@ fn errorFromCode(result: c_int) anyerror {
 		c.MDB_BAD_TXN => error.BadTxn,
 		c.MDB_BAD_VALSIZE => error.BadValSize,
 		c.MDB_BAD_DBI => error.BadDbi,
-		@enumToInt(std.os.E.NOENT) => error.NoSuchFileOrDirectory,
-		@enumToInt(std.os.E.IO) => error.InputOutputError,
-		@enumToInt(std.os.E.NOMEM) => error.OutOfMemory,
-		@enumToInt(std.os.E.ACCES) => error.ReadOnly,
-		@enumToInt(std.os.E.BUSY) => error.DeviceOrResourceBusy,
-		@enumToInt(std.os.E.INVAL) => error.InvalidParameter,
-		@enumToInt(std.os.E.NOSPC) => error.NoSpaceLeftOnDevice,
-		@enumToInt(std.os.E.EXIST) => error.FileAlreadyExists,
+		@intFromEnum(std.os.E.NOENT) => error.NoSuchFileOrDirectory,
+		@intFromEnum(std.os.E.IO) => error.InputOutputError,
+		@intFromEnum(std.os.E.NOMEM) => error.OutOfMemory,
+		@intFromEnum(std.os.E.ACCES) => error.ReadOnly,
+		@intFromEnum(std.os.E.BUSY) => error.DeviceOrResourceBusy,
+		@intFromEnum(std.os.E.INVAL) => error.InvalidParameter,
+		@intFromEnum(std.os.E.NOSPC) => error.NoSpaceLeftOnDevice,
+		@intFromEnum(std.os.E.EXIST) => error.FileAlreadyExists,
 		else => std.debug.panic("{s} {d}", .{c.mdb_strerror(result), result}),
 	};
 }
 
-test "iterator: no match" {
+const t = @import("t.zig");
+test "DB: iterator: no match" {
 	t.cleanup();
 	const kv = try DB.init("tests/db");
 	defer kv.deinit();
@@ -239,7 +236,7 @@ test "iterator: no match" {
 	try t.expectEqual(@as(?DB.Entry, null), try it.next());
 }
 
-test "iterator: matches" {
+test "DB: iterator: matches" {
 	t.cleanup();
 	const kv = try DB.init("tests/db");
 	defer kv.deinit();
@@ -267,7 +264,7 @@ test "iterator: matches" {
 	try t.expectEqual(@as(?DB.Entry, null), try it.next());
 }
 
-test "get/put" {
+test "DB: get/put" {
 	t.cleanup();
 	const kv = try DB.init("tests/db");
 	defer kv.deinit();

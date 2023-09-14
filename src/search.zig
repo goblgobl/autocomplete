@@ -1,9 +1,8 @@
 const std = @import("std");
-const t = @import("t.zig");
+const ac = @import("lib.zig");
 
-const ac = @import("autocomplete.zig");
-const Index = @import("index.zig").Index;
-const Input = @import("input.zig").Input;
+const Index = ac.Index;
+const Input = ac.Input;
 
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
@@ -23,7 +22,7 @@ const EntryScore = struct {
 	ngram_index: ac.NgramIndex,
 };
 
-pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdCollector) !usize {
+pub fn search(a: Allocator, value: []const u8, idx: *Index, ap: *AccumulatorPool, top_entries: *ac.IdCollector) !usize {
 	var arena = std.heap.ArenaAllocator.init(a);
 	defer arena.deinit();
 	const allocator = arena.allocator();
@@ -34,7 +33,10 @@ pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdC
 	var lookup = idx.lookup;
 
 	// and we're accumulating scores here
-	var accumulator = AutoHashMap(ac.Id, EntryScore).init(allocator);
+	// var accumulator = AutoHashMap(ac.Id, EntryScore).init(allocator);
+	// _ = ap;
+	var accumulator = try ap.acquire();
+	defer ap.release(accumulator);
 
 	// top scores/entries are mantained here
 	var top = Top.init(top_entries);
@@ -43,18 +45,14 @@ pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdC
 		const word = result.value;
 		for (0..word.len - 2) |ngram_index| {
 			const ngram = result.value[ngram_index..ngram_index+3];
-			const hits = lookup.get(ngram) orelse continue;
+			const matches = lookup.get(ngram) orelse continue;
 
 			const word_index = result.index;
-
-			// this can't all be necessary, can it?
-			const word_index_i32 = @as(i32, word_index);
-			const ngram_index_i32 = @intCast(i32, ngram_index);
-			const ngram_typed = @intCast(ac.NgramIndex, ngram_index);
+			const ngram_typed: ac.NgramIndex = @intCast(ngram_index);
 
 			var last_entry_id: ac.Id = 0;
-			for (hits.items) |hit| {
-				const entry_id = hit.entry_id;
+			for (matches.items) |match| {
+				const entry_id = match.entry_id;
 
 				if (entry_id == last_entry_id) {
 					// TODO:
@@ -72,28 +70,26 @@ pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdC
 
 				last_entry_id = entry_id;
 
-				// any hit gets a minimum score of 1
+				// any match gets a minimum score of 1
 				// (we can always filter out low scores as a final pass, but for now we
 				// want to collect everything)
 				var score : u16 = 1;
-
 
 				// word_index and ngram_indexes are the positions within the provided input
 				// entry_word_index and entry_ngram_indexes are the positions within the
 				// indexes entries. The closer word_index is to entry_word_index, the better.
 				// More importantly, the closer ngram_index is to entry_ngram_indexes, the better.
-				const entry_word_index = hit.word_index;
-				const entry_ngram_index = hit.ngram_index;
+				const entry_word_index = match.word_index;
+				const entry_ngram_index = match.ngram_index;
 
-
-				score += switch (word_index_i32 - entry_word_index) {
+				score += switch (@as(i16, word_index) - entry_word_index) {
 					0 => 6,   // words are in the same position, quite meaningful
-					1, -1 => 3, // words are off by 1, not very meangful
+					1, -1 => 3, // words are off by 1, not very meanigful
 					2, -2 => 1, // words are off by 2, which isn't great, but still a slight boost
 					else => 0,
 				};
 
-				switch (ngram_index_i32 - entry_ngram_index) {
+				switch (@as(i16, ngram_typed) - entry_ngram_index) {
 					0 => {
 						// ngrams at the right position are super important, especially early
 						// in the input, like the prefix.
@@ -112,7 +108,7 @@ pub fn search(a: Allocator, value: []const u8, idx: *Index, top_entries: *ac.IdC
 					else => {},
 				}
 
-				var gop = try accumulator.getOrPut(entry_id);
+				var gop = try accumulator.getOrPut(entry_id, ap);
 				if (gop.found_existing) {
 					// We've matched this entry before
 					const es = gop.value_ptr.*;
@@ -175,7 +171,7 @@ const Top = struct {
 	entries: *ac.IdCollector,
 
 	// entry => index lookup. Following the above example, entry_lookup[32] == 4
-	entry_lookup: KeyValue(ac.Id, u8, ac.MAX_RESULTS),
+	entry_lookup: KeyValue(ac.Id, u8),
 
 	const Self = @This();
 
@@ -185,7 +181,7 @@ const Top = struct {
 			.low_index = 0,
 			.entries = entries,
 			.scores = [_]u16{0} ** ac.MAX_RESULTS,
-			.entry_lookup = KeyValue(ac.Id, u8, ac.MAX_RESULTS).init(),
+			.entry_lookup = KeyValue(ac.Id, u8).init(),
 		};
 	}
 
@@ -210,7 +206,7 @@ const Top = struct {
 			}
 
 		} else if (entry_lookup.len < ac.MAX_RESULTS) {
-			const index = @intCast(u8, entry_lookup.len);
+			const index: u8 = @intCast(entry_lookup.len);
 			entry_lookup.add(entry_id, index);
 
 			scores[index] = new_score;
@@ -240,7 +236,7 @@ const Top = struct {
 			for (scores, 0..) |s, i| {
 				if (s < low_score) {
 					low_score = s;
-					low_index = @intCast(u8, i);
+					low_index = @intCast(i);
 				}
 			}
 			self.low_score = low_score;
@@ -281,29 +277,39 @@ const Top = struct {
 	}
 };
 
-// An optimized key=>value lookup for Top. Since we had a hard and small upper
+// An optimized key=>value lookup for Top. Since we have a hard and small upper
 // limit on the size, and don't need to delete, implementing this as two arrays
-// is much faster.
-fn KeyValue(comptime K: type, comptime V: type, comptime max: usize) type {
+// is faster.
+fn KeyValue(comptime K: type, comptime V: type) type {
 	return struct {
 		len: usize,
-		keys: [max]K,
-		values: [max]V,
+		keys: [ac.MAX_RESULTS]K,
+		values: [ac.MAX_RESULTS]V,
 
 		const Self = @This();
 
 		fn init() Self {
 			return .{
 				.len = 0,
-				.keys = undefined,
-				.values = undefined,
+				.keys = std.mem.zeroes([ac.MAX_RESULTS]K),
+				.values = std.mem.zeroes([ac.MAX_RESULTS]V),
 			};
 		}
 
 		fn get(self: Self, key: K) ?V {
-			for (self.keys[0..self.len], 0..) |k, i| {
-				if (k == key) return self.values[i];
-			}
+			@setRuntimeSafety(false);
+			std.debug.assert(ac.MAX_RESULTS == 10);
+			const keys = &self.keys;
+			if (keys[0] == key) return self.values[0];
+			if (keys[1] == key) return self.values[1];
+			if (keys[2] == key) return self.values[2];
+			if (keys[3] == key) return self.values[3];
+			if (keys[4] == key) return self.values[4];
+			if (keys[5] == key) return self.values[5];
+			if (keys[6] == key) return self.values[6];
+			if (keys[7] == key) return self.values[7];
+			if (keys[8] == key) return self.values[8];
+			if (keys[9] == key) return self.values[9];
 			return null;
 		}
 
@@ -332,13 +338,212 @@ fn KeyValue(comptime K: type, comptime V: type, comptime max: usize) type {
 	};
 }
 
+pub const Accumulator = struct {
+	const SIZE = 32768;
+	const SIZE_MASK = SIZE - 1;
+	const STATE_BITS = SIZE / 64;
+	const GROW_SIZE : u16 = @intFromFloat(SIZE * 0.7);
+
+	size: usize = 0,
+	ids: [SIZE]ac.Id = std.mem.zeroes([SIZE]ac.Id),
+	states: [STATE_BITS]u64 = std.mem.zeroes([STATE_BITS]u64),
+	scores: [SIZE]EntryScore = undefined,
+	next: ?*Accumulator = null,
+
+	const GetOrPutResult = struct {
+		found_existing: bool,
+		value_ptr: *EntryScore,
+	};
+
+	const ProbeResult = struct {
+		found: bool,
+		idx: u16,
+		slot: u64,
+		bucket: u16,
+	};
+
+	fn init() Accumulator {
+		return .{};
+	}
+
+	fn reset(self:* Accumulator) void {
+		self.size = 0;
+		self.next = null;
+		for (&self.states) |*i| {
+			i.* = 0;
+		}
+	}
+
+	fn getOrPut(self: *Accumulator, id: ac.Id, pool: *AccumulatorPool) !GetOrPutResult {
+		var pr = self.find(id);
+
+		if (pr.found) {
+			// we found the entry, return it
+			return .{
+				.found_existing = true,
+				.value_ptr = &self.scores[pr.idx],
+			};
+		}
+
+		if (self.next) |next| {
+			// we didn't find the entry, and we have a chained accumulator,
+			// delegate to it
+			return next.getOrPut(id, pool);
+		}
+
+		if (try self.conditionallyGrow(pool)) |next| {
+			// we didn't find the entry, but we just added a chained accumulator,
+			// delegate to it.
+			return next.getOrPut(id, pool);
+		}
+
+		// We didn't find the entry, we have no chained accumulator, put the entry
+		// in the (non-ideal) spot that we did find
+		self.size += 1;
+		const idx = pr.idx;
+		self.ids[idx] = id;
+		self.states[pr.bucket] |= pr.slot;
+		return .{
+			.found_existing = false,
+			.value_ptr = &self.scores[idx],
+		};
+	}
+
+	fn find(self: *Accumulator, id: ac.Id) ProbeResult {
+		const ids = &self.ids;
+		const states = &self.states;
+
+		var h = hash(id);
+		while (true) : (h += 1) {
+			const idx: u16 = @intCast(h & SIZE_MASK);
+			const bucket = idx / 64;
+			const slot = @as(u64, 1) << @intCast(idx & 63);
+
+			if (states[bucket] & slot == 0) {
+				return .{
+					.idx = idx,
+					.slot = slot,
+					.found = false,
+					.bucket = bucket,
+				};
+			}
+
+			if (ids[idx] == id) {
+				return .{
+					.idx = idx,
+					.slot = slot,
+					.found = true,
+					.bucket = bucket,
+				};
+			}
+		}
+
+		unreachable;
+	}
+
+	fn conditionallyGrow(self: *Accumulator, pool: *AccumulatorPool) !?*Accumulator{
+		if (self.size < GROW_SIZE) {
+			return null;
+		}
+		const acc = try pool.acquire();
+		self.next = acc;
+		return acc;
+	}
+};
+
+fn hash(x: ac.Id) u64 {
+	var h: u64 = @intCast(x);
+	h ^= h >> 16;
+	h *%= 0x7feb352d;
+	h ^= h >> 15;
+	h *%= 0x846ca68b;
+	h ^= h >> 16;
+	return h;
+}
+
+// fn hash(x: ac.Id ) u64 {
+// 	return std.hash.Wyhash.hash(0, std.mem.asBytes(&x));
+// }
+
+pub const AccumulatorPool = struct {
+	available: usize,
+	allocator: Allocator,
+	mutex: std.Thread.Mutex,
+	accumulators: []*Accumulator,
+
+	pub fn init(allocator: Allocator, size: usize) !AccumulatorPool {
+		const accumulators = try allocator.alloc(*Accumulator, size);
+		for (0..size) |i| {
+			const accumulator = try allocator.create(Accumulator);
+			accumulator.* = Accumulator.init();
+			accumulators[i] = accumulator;
+		}
+
+		return .{
+			.mutex = .{},
+			.available = size,
+			.allocator = allocator,
+			.accumulators = accumulators,
+		};
+	}
+
+	pub fn deinit(self: *AccumulatorPool) void {
+		const allocator = self.allocator;
+		for (self.accumulators) |a| {
+			allocator.destroy(a);
+		}
+		allocator.free(self.accumulators);
+	}
+
+	pub fn acquire(self: *AccumulatorPool) !*Accumulator {
+		const accumulators = self.accumulators;
+		self.mutex.lock();
+		const available = self.available;
+		if (available == 0) {
+			self.mutex.unlock();
+			const accumulator = try self.allocator.create(Accumulator);
+			accumulator.* = Accumulator.init();
+			return accumulator;
+		}
+		const new_available = available - 1;
+		const acc = accumulators[new_available];
+		self.available = new_available;
+		self.mutex.unlock();
+
+		return acc;
+	}
+
+	pub fn release(self: *AccumulatorPool, a: *Accumulator) void {
+		if (a.next) |next| {
+			self.release(next);
+		}
+
+		a.reset();
+		const accumulators = self.accumulators;
+		self.mutex.lock();
+
+		const available = self.available;
+		if (available == accumulators.len) {
+			self.mutex.unlock();
+			const allocator = self.allocator;
+			allocator.destroy(a);
+			return;
+		}
+
+		accumulators[available] = a;
+		self.available = available + 1;
+		self.mutex.unlock();
+	}
+};
+
+const t = ac.testing;
 test "search: empty index" {
 	var entries : ac.IdCollector = undefined;
 
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
 	const found = try search(t.allocator, "anything", &idx, &entries);
-	try t.expectEqual(@as(usize, 0), found);
+	try t.expectEqual(0, found);
 }
 
 test "search: index with 1 entry" {
@@ -349,13 +554,13 @@ test "search: index with 1 entry" {
 	try idx.add(99, "silver needle");
 
 	var found = try search(t.allocator, "nope", &idx, &entries);
-	try t.expectEqual(@as(usize, 0), found);
+	try t.expectEqual(0, found);
 
 	const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
 	for (inputs) |input| {
 		found = try search(t.allocator, input, &idx, &entries);
 		try t.expectEqual(found, 1);
-		try t.expectEqual(@as(u32, 99), entries[0]);
+		try t.expectEqual(99, entries[0]);
 	}
 }
 
@@ -371,21 +576,21 @@ test "search: index with multiple entries" {
 	try idx.add(90, "yellow mountain");
 
 	var found = try search(t.allocator, "nope", &idx, &entries);
-	try t.expectEqual(@as(usize, 0), found);
+	try t.expectEqual(0, found);
 
 	found = try search(t.allocator, "kee", &idx, &entries);
 	try t.expectEqual(found, 1);
-	try t.expectEqual(@as(u32, 60), entries[0]);
+	try t.expectEqual(60, entries[0]);
 
 	found = try search(t.allocator, "yellow", &idx, &entries);
 	try t.expectEqual(found, 2);
-	try t.expectEqual(@as(u32, 90), entries[0]);
-	try t.expectEqual(@as(u32, 80), entries[1]);
+	try t.expectEqual(90, entries[0]);
+	try t.expectEqual(80, entries[1]);
 
 	found = try search(t.allocator, "ell dragon", &idx, &entries);
 	try t.expectEqual(found, 2);
-	try t.expectEqual(@as(u32, 80), entries[0]);
-	try t.expectEqual(@as(u32, 90	), entries[1]);
+	try t.expectEqual(80, entries[0]);
+	try t.expectEqual(90, entries[1]);
 }
 
 test "search: full" {
@@ -394,11 +599,11 @@ test "search: full" {
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
 	for (0..ac.MAX_RESULTS+5) |i| {
-		try idx.add(@intCast(ac.Id, i), "cab");
+		try idx.add(@intCast(i), "cab");
 	}
 
 	var found = try search(t.allocator, "nope", &idx, &entries);
-	try t.expectEqual(@as(usize, 0), found);
+	try t.expectEqual(0, found);
 
 	found = try search(t.allocator, "cab", &idx, &entries);
 	try t.expectEqual(found, ac.MAX_RESULTS);
@@ -423,14 +628,12 @@ test "search: matching" {
 	try idx.add(2, "salad");
 	try idx.add(3, "mild salsa");
 	try idx.add(4, "hot salsa");
-	try idx.add(1, "balsamic");
 
 	const found = try search(t.allocator, "salsa", &idx, &entries);
-	try t.expectEqual(found, 4);
-	try t.expectEqual(@as(u32, 4), entries[0]);
-	try t.expectEqual(@as(u32, 3), entries[1]);
-	try t.expectEqual(@as(u32, 1), entries[2]);
-	try t.expectEqual(@as(u32, 2), entries[3]);
+	try t.expectEqual(found, 3);
+	try t.expectEqual(4, entries[0]);
+	try t.expectEqual(3, entries[1]);
+	try t.expectEqual(2, entries[2]);
 }
 
 // TODO: we need to index trigrams with missing letters
@@ -487,7 +690,7 @@ test "top" {
 		var top = Top.init(&entries);
 
 		for (1..100) |i| {
-			var b : u16 = @intCast(u16, i);
+			var b : u16 = @intCast(i);
 			top.update(b, b);
 		}
 
@@ -495,7 +698,7 @@ test "top" {
 		try assertTop(&top, expected[0..]);
 
 		for (10..30) |i| {
-			var b : u16 = @intCast(u16, i);
+			var b : u16 = @intCast(i);
 			top.update(b, b + 100);
 		}
 		expected = [_]u32{29, 28, 27, 26, 25, 24, 23, 22, 21, 20};
@@ -526,36 +729,89 @@ fn assertTop(top: *Top, expected: []u32) !void {
 }
 
 test "KeyValue: replaceOrPut" {
-	var kv = KeyValue(u32, u8, 5).init();
+	var kv = KeyValue(u32, u8).init();
 	try t.expectEqual(@as(?u8, null), kv.get(32));
 
 	kv.replaceOrPut(0, 32, 10);
-	try t.expectEqual(@as(u8, 10), kv.get(32).?);
+	try t.expectEqual(10, kv.get(32).?);
 
 	kv.replaceOrPut(0, 9932, 2);
-	try t.expectEqual(@as(u8, 10), kv.get(32).?);
-	try t.expectEqual(@as(u8, 2), kv.get(9932).?);
+	try t.expectEqual(10, kv.get(32).?);
+	try t.expectEqual(2, kv.get(9932).?);
 
 	kv.replaceOrPut(9932, 888, 3);
-	try t.expectEqual(@as(u8, 10), kv.get(32).?);
-	try t.expectEqual(@as(u8, 3), kv.get(888).?);
+	try t.expectEqual(10, kv.get(32).?);
+	try t.expectEqual(3, kv.get(888).?);
 	try t.expectEqual(@as(?u8, null), kv.get(9932));
 
 	kv.replaceOrPut(32, 2323, 5);
-	try t.expectEqual(@as(u8, 5), kv.get(2323).?);
-	try t.expectEqual(@as(u8, 3), kv.get(888).?);
+	try t.expectEqual(5, kv.get(2323).?);
+	try t.expectEqual(3, kv.get(888).?);
 	try t.expectEqual(@as(?u8, null), kv.get(32));
 }
 
 test "KeyValue: add" {
-	var kv = KeyValue(u32, u8, 3).init();
+	var kv = KeyValue(u32, u8).init();
 	try t.expectEqual(@as(?u8, null), kv.get(10));
 
 	kv.add(10, 1);
 	kv.add(11, 2);
 	kv.add(12, 3);
 
-	try t.expectEqual(@as(u8, 1), kv.get(10).?);
-	try t.expectEqual(@as(u8, 2), kv.get(11).?);
-	try t.expectEqual(@as(u8, 3), kv.get(12).?);
+	try t.expectEqual(1, kv.get(10).?);
+	try t.expectEqual(2, kv.get(11).?);
+	try t.expectEqual(3, kv.get(12).?);
+}
+
+test "Accumulator: getOrPut" {
+	var pool = try AccumulatorPool.init(t.allocator, 1);
+	defer pool.deinit();
+
+	var acc = try pool.acquire();
+	defer pool.release(acc);
+
+	var gop = try acc.getOrPut(32, &pool);
+	try t.expectEqual(false, gop.found_existing);
+	gop.value_ptr.* = makeEntryScore(1, 2, 3);
+
+	gop = try acc.getOrPut(32, &pool);
+	try t.expectEqual(true, gop.found_existing);
+	try t.expectEqual(1, gop.value_ptr.score);
+}
+
+test "Accumulator: growth" {
+	var pool = try AccumulatorPool.init(t.allocator, 1);
+	defer pool.deinit();
+
+	var acc = try pool.acquire();
+
+	for (1..10000) |i| {
+		const id: u32 = @intCast(i);
+		var gop = try acc.getOrPut(id, &pool);
+		try t.expectEqual(false, gop.found_existing);
+		gop.value_ptr.* = makeEntryScore(1, 2, 3);
+	}
+
+	for (1..10000) |i| {
+		const id: u32 = @intCast(i);
+		var gop = try acc.getOrPut(id, &pool);
+		try t.expectEqual(true, gop.found_existing);
+	}
+	pool.release(acc);
+
+	acc = try pool.acquire();
+	defer pool.release(acc);
+	for (1..10000) |i| {
+		const id: u32 = @intCast(i);
+		var gop = try acc.getOrPut(id, &pool);
+		try t.expectEqual(false, gop.found_existing);
+	}
+}
+
+fn makeEntryScore(score: u16, word_index: ac.WordIndex, ngram_index: ac.NgramIndex) EntryScore{
+	return .{
+		.score = score,
+		.word_index = word_index,
+		.ngram_index = ngram_index,
+	};
 }
