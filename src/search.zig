@@ -187,24 +187,19 @@ const Top = struct {
 
 	fn update(self: *Self, entry_id: ac.Id, new_score: u16) void {
 		var scores = &self.scores;
-		var low_score = self.low_score;
-		var low_index = self.low_index;
 		var entry_lookup = &self.entry_lookup;
-
-		var find_new_low = false;
+		const low_score = self.low_score;
 
 		if (entry_lookup.get(entry_id)) |score_index| {
 			// This entry is already a top entry, we need to update its score
 			const existing_score = scores[score_index];
 			scores[score_index] = new_score;
 
-			if (existing_score == low_score) {
-				// if this entry had our lowest score, it might no longer, so we'll have
-				// to find the new lowest score.
-				low_score = new_score;
-				find_new_low = true;
+			if (existing_score != low_score) {
+				// This entry wasn't our previous lowest score, and since the scores can
+				// only go up, we know that it still can't be the lowest score.
+				return;
 			}
-
 		} else if (entry_lookup.len < ac.MAX_RESULTS) {
 			const index: u8 = @intCast(entry_lookup.len);
 			entry_lookup.add(entry_id, index);
@@ -215,33 +210,42 @@ const Top = struct {
 				self.low_score = new_score;
 				self.low_index = index;
 			}
+			return;
 		} else if (new_score > low_score) {
 			var entries = self.entries;
 
 			// we have a score for an entry which IS not currently in the top entries
 			// but which now has a score higher than our lowest top score
 
-			// The first thing we'll do is swap out the old lowest score with this new score
+			// The first thing we'll do is swap out the old lowest score with this new
+			// score, because the old lowest entry is getting kicked out
+			const low_index = self.low_index;
 			scores[low_index] = new_score;
 			entry_lookup.replaceOrPut(entries[low_index], entry_id, low_index);
 			entries[low_index] = entry_id;
-
-			// there's no guarantee that this new score is the lowest, we'll have to
-			// find the new lowest
-			low_score = new_score;
-			find_new_low = true;
+		} else {
+			// This entry isn't alreayd a top score
+			// We're already tracking MAX_RESULTS
+			// and this entry's score isn't better than our worst best score
+			// We can ignore it
+			return;
 		}
 
-		if (find_new_low) {
-			for (scores, 0..) |s, i| {
-				if (s < low_score) {
-					low_score = s;
-					low_index = @intCast(i);
-				}
+		// We got here because one of the 3 above cases (possibly) changed our
+		// lowest score and we now need to figure out what the lowest score is
+		// and who it belongs to.
+
+		var new_low_index: u8 = 0;
+		var new_low_score: u16 = scores[0];
+		for (1..ac.MAX_RESULTS) |i| {
+			const s = scores[i];
+			if (s < low_score) {
+				new_low_score = s;
+				new_low_index = @intCast(i);
 			}
-			self.low_score = low_score;
-			self.low_index = low_index;
 		}
+		self.low_score = new_low_score;
+		self.low_index = new_low_index;
 	}
 
 	// After this is called, top should not be used, as we sort self.entries
@@ -305,7 +309,6 @@ fn KeyValue(comptime K: type, comptime V: type) type {
 
 		fn add(self: *Self, key: K, value: V) void {
 			const len = self.len;
-			// std.debug.assert(len < self.keys.len);
 			self.keys[len] = key;
 			self.values[len] = value;
 			self.len = len + 1;
@@ -317,18 +320,8 @@ fn KeyValue(comptime K: type, comptime V: type) type {
 				self.values[i] = value_to_add;
 				return;
 			}
-			const len = self.len;
-			// for (self.keys[0..len], 0..) |k, i| {
-			// 	if (k == key_to_replace) {
-			// 		self.keys[i] = key_to_add;
-			// 		self.values[i] = value_to_add;
-			// 		return;
-			// 	}
-			// }
-			// std.debug.assert(len < self.keys.len);
-			self.keys[len] = key_to_add;
-			self.values[len] = value_to_add;
-			self.len = len + 1;
+				// self.add(key_to_add, value_to_add);
+			unreachable;
 		}
 	};
 }

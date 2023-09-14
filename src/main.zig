@@ -38,7 +38,7 @@ pub fn quickBenchmark() !void {
 	var timer = try std.time.Timer.start();
 
 	std.debug.print("LOADED\n", .{});
-	const LOOPS = 10000;
+	const LOOPS = 1000;
 	timer.reset();
 
 	for (0..LOOPS) |_| {
