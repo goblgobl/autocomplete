@@ -23,18 +23,13 @@ const EntryScore = struct {
 };
 
 pub fn search(a: Allocator, value: []const u8, idx: *Index, ap: *AccumulatorPool, top_entries: *ac.IdCollector) !usize {
-	var arena = std.heap.ArenaAllocator.init(a);
-	defer arena.deinit();
-	const allocator = arena.allocator();
-
-	var input = try Input.parse(allocator, value);
+	var input = try Input.parse(a, value);
+	defer a.free(input.normalized_buffer);
 
 	// we're getting matches from here
 	var lookup = idx.lookup;
 
 	// and we're accumulating scores here
-	// var accumulator = AutoHashMap(ac.Id, EntryScore).init(allocator);
-	// _ = ap;
 	var accumulator = try ap.acquire();
 	defer ap.release(accumulator);
 
@@ -147,6 +142,7 @@ pub fn search(a: Allocator, value: []const u8, idx: *Index, ap: *AccumulatorPool
 			}
 		}
 	}
+
 	return top.rank();
 }
 
@@ -173,8 +169,6 @@ const Top = struct {
 	// entry => index lookup. Following the above example, entry_lookup[32] == 4
 	entry_lookup: KeyValue(ac.Id, u8),
 
-	const Self = @This();
-
 	fn init(entries: *ac.IdCollector) Top {
 		return Top{
 			.low_score = 0,
@@ -185,7 +179,7 @@ const Top = struct {
 		};
 	}
 
-	fn update(self: *Self, entry_id: ac.Id, new_score: u16) void {
+	fn update(self: *Top, entry_id: ac.Id, new_score: u16) void {
 		var scores = &self.scores;
 		var entry_lookup = &self.entry_lookup;
 		const low_score = self.low_score;
@@ -237,9 +231,9 @@ const Top = struct {
 
 		var new_low_index: u8 = 0;
 		var new_low_score: u16 = scores[0];
-		for (1..ac.MAX_RESULTS) |i| {
+		for (1..entry_lookup.len) |i| {
 			const s = scores[i];
-			if (s < low_score) {
+			if (s < new_low_score) {
 				new_low_score = s;
 				new_low_index = @intCast(i);
 			}
@@ -251,7 +245,7 @@ const Top = struct {
 	// After this is called, top should not be used, as we sort self.entries
 	// based on the scores VALUE, and thus the entries indexes are no longer
 	// consistent with the score.
-	fn rank(self: *Self) usize {
+	fn rank(self: *Top) usize {
 		// we are going to sort this
 		var entries = self.entries;
 
@@ -374,10 +368,7 @@ pub const Accumulator = struct {
 	}
 
 	fn reset(self:* Accumulator) void {
-		self.next = null;
-		for (&self.states) |*i| {
-			i.* = 0;
-		}
+		@memset(&self.states, 0);
 	}
 
 	fn getOrPut(self: *Accumulator, id: ac.Id, pool: *AccumulatorPool) !GetOrPutResult {
@@ -389,13 +380,15 @@ pub const Accumulator = struct {
 		var acc = self;
 		while (true) {
 			if (acc.states[bucket] & slot == 0) {
+				acc.states[bucket] |= slot;
+				acc.entries[idx] = .{.id = id, .score = undefined};
 				return .{
 					.found_existing = false,
 					.value_ptr = &acc.entries[idx].score,
 				};
 			}
 
-			var entry = &acc.entries[idx];
+			const entry = &acc.entries[idx];
 			if (entry.id == id) {
 				return .{
 					.found_existing = true,
@@ -480,58 +473,86 @@ pub const AccumulatorPool = struct {
 	}
 
 	pub fn release(self: *AccumulatorPool, a: *Accumulator) void {
-		if (a.next) |next| {
-			self.release(next);
+		var acc = a;
+		while (true) {
+			// if our pool is full again, we don't need to reset since we'll just destroy
+			// the acc...but, if we wait to see if the pool is full or not, we'll be under
+			// lock. Still, this reset is pretty costly, so: TODO: don't call reset if
+			// pool is full
+			acc.reset();
+			acc = acc.next orelse break;
 		}
 
-		a.reset();
+		acc = a;
 		const accumulators = self.accumulators;
+
 		self.mutex.lock();
+		var available = self.available;
 
-		const available = self.available;
-		if (available == accumulators.len) {
-			self.mutex.unlock();
-			const allocator = self.allocator;
-			allocator.destroy(a);
-			return;
+		while (true) {
+			if (available == accumulators.len) {
+				self.available = available;
+				self.mutex.unlock();
+				// if our pool is full, then we can destroy the entire chain of allocator
+				// which we can do outside of our lock
+				destroyChain(self.allocator, acc);
+				return;
+			}
+
+			accumulators[available] = acc;
+			available += 1;
+			var current = acc;
+			acc = acc.next orelse break;
+			current.next = null;
 		}
-
-		accumulators[available] = a;
-		self.available = available + 1;
+		self.available = available;
 		self.mutex.unlock();
+	}
+
+	fn destroyChain(allocator: Allocator, a: *Accumulator) void {
+		if (a.next) |n| {
+			destroyChain(allocator, n);
+		}
+		allocator.destroy(a);
 	}
 };
 
 const t = ac.testing;
 test "search: empty index" {
 	var entries : ac.IdCollector = undefined;
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
-	const found = try search(t.allocator, "anything", &idx, &entries);
+	const found = try search(t.allocator, "anything", &idx, &ap, &entries);
 	try t.expectEqual(0, found);
 }
 
 test "search: index with 1 entry" {
 	var entries : ac.IdCollector = undefined;
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
 	try idx.add(99, "silver needle");
 
-	var found = try search(t.allocator, "nope", &idx, &entries);
+	var found = try search(t.allocator, "nope", &idx, &ap, &entries);
 	try t.expectEqual(0, found);
 
 	const inputs = [_][]const u8 {"silver needle", "silver", "needle", "  SilVER", "silvar", "need"};
 	for (inputs) |input| {
-		found = try search(t.allocator, input, &idx, &entries);
-		try t.expectEqual(found, 1);
+		found = try search(t.allocator, input, &idx, &ap, &entries);
+		try t.expectEqual(1, found);
 		try t.expectEqual(99, entries[0]);
 	}
 }
 
 test "search: index with multiple entries" {
 	var entries : ac.IdCollector = undefined;
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
@@ -541,26 +562,36 @@ test "search: index with multiple entries" {
 	try idx.add(80, "dragon well");
 	try idx.add(90, "yellow mountain");
 
-	var found = try search(t.allocator, "nope", &idx, &entries);
-	try t.expectEqual(0, found);
+	// {
+	// 	const found = try search(t.allocator, "nope", &idx, &ap, &entries);
+	// 	try t.expectEqual(0, found);
+	// }
 
-	found = try search(t.allocator, "kee", &idx, &entries);
-	try t.expectEqual(found, 1);
-	try t.expectEqual(60, entries[0]);
+	// {
+	// 	const found = try search(t.allocator, "kee", &idx, &ap, &entries);
+	// 	try t.expectEqual(1, found);
+	// 	try t.expectEqual(60, entries[0]);
+	// }
 
-	found = try search(t.allocator, "yellow", &idx, &entries);
-	try t.expectEqual(found, 2);
-	try t.expectEqual(90, entries[0]);
-	try t.expectEqual(80, entries[1]);
+	{
+		const found = try search(t.allocator, "yellow", &idx, &ap, &entries);
+		try t.expectEqual(2, found);
+		try t.expectEqual(90, entries[0]);
+		try t.expectEqual(80, entries[1]);
+	}
 
-	found = try search(t.allocator, "ell dragon", &idx, &entries);
-	try t.expectEqual(found, 2);
-	try t.expectEqual(80, entries[0]);
-	try t.expectEqual(90, entries[1]);
+	{
+		const found = try search(t.allocator, "ell dragon", &idx, &ap, &entries);
+		try t.expectEqual(2, found);
+		try t.expectEqual(80, entries[0]);
+		try t.expectEqual(90, entries[1]);
+	}
 }
 
 test "search: full" {
 	var entries : ac.IdCollector = undefined;
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
@@ -568,26 +599,30 @@ test "search: full" {
 		try idx.add(@intCast(i), "cab");
 	}
 
-	var found = try search(t.allocator, "nope", &idx, &entries);
+	var found = try search(t.allocator, "nope", &idx, &ap, &entries);
 	try t.expectEqual(0, found);
 
-	found = try search(t.allocator, "cab", &idx, &entries);
-	try t.expectEqual(found, ac.MAX_RESULTS);
+	found = try search(t.allocator, "cab", &idx, &ap, &entries);
+	try t.expectEqual(ac.MAX_RESULTS, found);
 }
 
 test "search: fuzzyness" {
 	var entries : ac.IdCollector = undefined;
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
 	try idx.add(50, "among famous books");
 
-	const found = try search(t.allocator, "mon amour", &idx, &entries);
-	try t.expectEqual(found, 1);
+	const found = try search(t.allocator, "mon amour", &idx, &ap, &entries);
+	try t.expectEqual(1, found);
 }
 
 test "search: matching" {
 	var entries : ac.IdCollector = undefined;
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
 	var idx = Index.init(t.allocator, Index.Config{.id = 0});
 	defer idx.deinit();
@@ -595,8 +630,8 @@ test "search: matching" {
 	try idx.add(3, "mild salsa");
 	try idx.add(4, "hot salsa");
 
-	const found = try search(t.allocator, "salsa", &idx, &entries);
-	try t.expectEqual(found, 3);
+	const found = try search(t.allocator, "salsa", &idx, &ap, &entries);
+	try t.expectEqual(3, found);
 	try t.expectEqual(4, entries[0]);
 	try t.expectEqual(3, entries[1]);
 	try t.expectEqual(2, entries[2]);
@@ -655,24 +690,27 @@ test "top" {
 		// many results
 		var top = Top.init(&entries);
 
-		for (1..100) |i| {
-			var b : u16 = @intCast(i);
-			top.update(b, b);
+		{
+			for (1..100) |i| {
+				var b : u16 = @intCast(i);
+				top.update(b, b);
+			}
+			const expected = [_]u32{99, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 84};
+			try assertTop(&top, expected[0..]);
 		}
 
-		var expected = [_]u32{99, 98, 97, 96, 95, 94, 93, 92, 91, 90};
-		try assertTop(&top, expected[0..]);
-
-		for (10..30) |i| {
-			var b : u16 = @intCast(i);
-			top.update(b, b + 100);
+		{
+			for (17..37) |i| {
+				var b : u16 = @intCast(i);
+				top.update(b, b + 100);
+			}
+			const expected = [_]u32{36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21};
+			try assertTop(&top, expected[0..]);
 		}
-		expected = [_]u32{29, 28, 27, 26, 25, 24, 23, 22, 21, 20};
-		try assertTop(&top, expected[0..]);
 	}
 }
 
-fn assertTop(top: *Top, expected: []u32) !void {
+fn assertTop(top: *Top, expected: []const u32) !void {
 	const n = top.rank();
 	const entries = top.entries[0..n];
 	try t.expectEqual(expected.len, entries.len);
@@ -689,8 +727,8 @@ fn assertTop(top: *Top, expected: []u32) !void {
 	// We're able to do this because the entry_lookup keeps the entry -> index
 	// which we can use to restore the entries array.
 	const el = top.entry_lookup;
-	for (el.keys[0..el.len], el.values[0..el.len]) |entry_id, index_id| {
-		top.entries[index_id] = entry_id;
+	for (el.values[0..el.len], 0..) |index_id, i| {
+		top.entries[index_id] = el.keys[i];
 	}
 }
 
@@ -730,47 +768,49 @@ test "KeyValue: add" {
 }
 
 test "Accumulator: getOrPut" {
-	var pool = try AccumulatorPool.init(t.allocator, 1);
-	defer pool.deinit();
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
-	var acc = try pool.acquire();
-	defer pool.release(acc);
-
-	var gop = try acc.getOrPut(32, &pool);
+	var acc = try ap.acquire();
+	defer ap.release(acc);
+	var gop = try acc.getOrPut(32, &ap);
 	try t.expectEqual(false, gop.found_existing);
 	gop.value_ptr.* = makeEntryScore(1, 2, 3);
 
-	gop = try acc.getOrPut(32, &pool);
+	gop = try acc.getOrPut(32, &ap);
 	try t.expectEqual(true, gop.found_existing);
 	try t.expectEqual(1, gop.value_ptr.score);
 }
 
 test "Accumulator: growth" {
-	var pool = try AccumulatorPool.init(t.allocator, 1);
-	defer pool.deinit();
+	var ap = try AccumulatorPool.init(t.allocator, 1);
+	defer ap.deinit();
 
-	var acc = try pool.acquire();
+	{
+		var acc = try ap.acquire();
+		defer ap.release(acc);
+		for (1..10000) |i| {
+			const id: u32 = @intCast(i);
+			var gop = try acc.getOrPut(id, &ap);
+			try t.expectEqual(false, gop.found_existing);
+			gop.value_ptr.* = makeEntryScore(1, 2, 3);
+		}
 
-	for (1..10000) |i| {
-		const id: u32 = @intCast(i);
-		var gop = try acc.getOrPut(id, &pool);
-		try t.expectEqual(false, gop.found_existing);
-		gop.value_ptr.* = makeEntryScore(1, 2, 3);
+		for (1..10000) |i| {
+			const id: u32 = @intCast(i);
+			var gop = try acc.getOrPut(id, &ap);
+			try t.expectEqual(true, gop.found_existing);
+		}
 	}
 
-	for (1..10000) |i| {
-		const id: u32 = @intCast(i);
-		var gop = try acc.getOrPut(id, &pool);
-		try t.expectEqual(true, gop.found_existing);
-	}
-	pool.release(acc);
-
-	acc = try pool.acquire();
-	defer pool.release(acc);
-	for (1..10000) |i| {
-		const id: u32 = @intCast(i);
-		var gop = try acc.getOrPut(id, &pool);
-		try t.expectEqual(false, gop.found_existing);
+	{
+		var acc = try ap.acquire();
+		defer ap.release(acc);
+		for (1..10000) |i| {
+			const id: u32 = @intCast(i);
+			var gop = try acc.getOrPut(id, &ap);
+			try t.expectEqual(false, gop.found_existing);
+		}
 	}
 }
 

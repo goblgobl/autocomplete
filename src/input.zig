@@ -43,8 +43,6 @@ pub const Input = struct {
 	}
 
 	pub fn next(self: *Self) ?Word {
-		@setRuntimeSafety(builtin.is_test);
-
 		var word_count = self.word_count;
 		if (word_count == ac.MAX_WORDS) {
 			// we've reached the max number of words we support per entry
@@ -83,8 +81,15 @@ pub const Input = struct {
 
 		// when next() is called again, we'll start scanning input from where we left off
 		self.input = input[i..];
-		self.normalized_position = norm_position;
 
+		if (norm_position == word_start) {
+			// this was a non-ascii word, remove the whitespace we added and go to the
+			// next word
+			norm_position -= 1;
+			return self.next();
+		}
+
+		self.normalized_position = norm_position;
 
 		if (norm_position - word_start < 3) {
 			// our "word" is only 1 or 2 characters, skip to the next word
@@ -187,17 +192,26 @@ test "input: parse two word" {
 }
 
 test "input: stops at 8 words" {
-		var input = try testCollectInput("wrd1 wrd2 wrd3 wrd4 wrd5 wrd6 wrd7 wrd8 wrd9");
-		defer input.deinit();
-		try t.expectEqual(7, input.word_count);
+	var input = try testCollectInput("wrd1 wrd2 wrd3 wrd4 wrd5 wrd6 wrd7 wrd8 wrd9");
+	defer input.deinit();
+	try t.expectEqual(7, input.word_count);
 }
 
 test "input: stops at 31 character words" {
-		var input = try testCollectInput("0123456789012345678901234567ABC 0123456789012345678901234567VWXYZ");
-		defer input.deinit();
-		try t.expectEqual(2, input.word_count);
-		try input.expectWord("0123456789012345678901234567abc", 0);
-		try input.expectWord("0123456789012345678901234567vwx", 1);
+	var input = try testCollectInput("0123456789012345678901234567ABC 0123456789012345678901234567VWXYZ");
+	defer input.deinit();
+	try t.expectEqual(2, input.word_count);
+	try input.expectWord("0123456789012345678901234567abc", 0);
+	try input.expectWord("0123456789012345678901234567vwx", 1);
+}
+
+test "input: normalize non-ascii words" {
+	var input = try testCollectInput("Cat & Dog");
+	defer input.deinit();
+	try t.expectEqual(2, input.word_count);
+	try input.expectWord("cat", 0);
+	try input.expectWord("dog", 1);
+	try t.expectString("cat dog", input.normalized);
 }
 
 const ParseTestResult = struct {

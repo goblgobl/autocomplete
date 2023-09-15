@@ -18,4 +18,5 @@ pub const MAX_WORD_LENGTH = (1 << @bitSizeOf(NgramIndex)) - 1;
 
 test {
 	std.testing.refAllDecls(@This());
+	_ = @import("search.zig");
 }

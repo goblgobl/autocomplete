@@ -104,6 +104,7 @@ pub const Index = struct {
 			}
 		}
 		entry.word_count = input.word_count;
+		entry.normalized = input.normalized();
 		entry._normalized_buffer = input.normalized_buffer;
 	}
 
@@ -115,6 +116,7 @@ pub const Index = struct {
 const Entry = struct {
 	id: ac.Id,
 	word_count: u8,
+	normalized: []const u8, // TODO: remove
 	_normalized_buffer: []const u8,
 };
 
